@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Restore backend
+        run: dotnet restore backend/MonitoringPlatform.Api.csproj
+
+      - name: Test backend
+        run: dotnet test backend/tests/MonitoringPlatform.Api.Tests.csproj -c Release
+
+      - name: Check vulnerable backend dependencies
+        run: dotnet list backend/MonitoringPlatform.Api.csproj package --vulnerable --include-transitive

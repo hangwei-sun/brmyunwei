@@ -1,0 +1,15 @@
+node_modules/
+.npm-cache/
+dist/
+**/bin/
+**/obj/
+backend/Data/*.db
+backend/Data/*.db-wal
+backend/Data/*.db-shm
+backend/appsettings.Production.json
+.env
+.env.*
+!.env.example
+.vs/
+.idea/
+*.user
