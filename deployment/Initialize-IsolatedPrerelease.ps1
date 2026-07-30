@@ -81,7 +81,8 @@ $publicCertificate = Join-Path $install 'prerelease-server.cer'
 $rootCertificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rootCertificate.RawData))).Replace('-', '')
 Export-Certificate -Cert $rootCertificate -FilePath $rootPublicCertificate -Force | Out-Null
 Export-Certificate -Cert $certificate -FilePath $publicCertificate -Force | Out-Null
-Import-Certificate -FilePath $rootPublicCertificate -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
+& certutil.exe -user -f -addstore Root $rootPublicCertificate | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to trust the isolated prerelease root CA in CurrentUser\Root.' }
 
 $configuration = [ordered]@{
     AllowedHosts = "localhost;$machineName"
