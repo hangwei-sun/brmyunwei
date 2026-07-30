@@ -23,6 +23,34 @@ if (Test-Path -LiteralPath (Join-Path $install 'initialized.json')) {
     throw "Prerelease is already initialized: $install"
 }
 
+function Test-HttpsPortAvailable([int]$Port) {
+    $excludedOutput = & netsh.exe interface ipv4 show excludedportrange protocol=tcp 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect Windows TCP excluded port ranges before initializing HTTPS port $Port."
+    }
+
+    foreach ($match in [regex]::Matches(($excludedOutput -join [Environment]::NewLine), '(?m)^\s*(\d+)\s+(\d+)\s*$')) {
+        $rangeStart = [int]$match.Groups[1].Value
+        $rangeEnd = [int]$match.Groups[2].Value
+        if ($Port -ge $rangeStart -and $Port -le $rangeEnd) {
+            throw "HTTPS port $Port is reserved by a Windows TCP excluded port range ($rangeStart-$rangeEnd). Choose an approved port with -HttpsPort before initializing."
+        }
+    }
+
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
+    try {
+        $listener.Start()
+    }
+    catch {
+        throw "HTTPS port $Port cannot be bound on this computer: $($_.Exception.Message) Choose an approved unused port with -HttpsPort before initializing."
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+Test-HttpsPortAvailable -Port $HttpsPort
+
 $appRoot = Join-Path $install 'app'
 $dataRoot = Join-Path $install 'data'
 $backupRoot = Join-Path $install 'backup'

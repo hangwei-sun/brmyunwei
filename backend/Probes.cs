@@ -223,8 +223,13 @@ sealed class ProbeWorker(IServiceScopeFactory scopeFactory, IProbeExecutor execu
         var now = DateTimeOffset.UtcNow;
         var candidates = await scope.ServiceProvider.GetRequiredService<MonitoringDbContext>().ProbeDefinitions.AsNoTracking()
             .Where(probe => probe.Enabled)
-            .OrderBy(probe => probe.NextRunAt).Select(probe => new { probe.Id, probe.NextRunAt }).Take(256).ToListAsync(cancellationToken);
-        return candidates.Where(probe => probe.NextRunAt is null || probe.NextRunAt <= now).Select(probe => probe.Id).ToList();
+            .Select(probe => new { probe.Id, probe.NextRunAt }).ToListAsync(cancellationToken);
+        return candidates
+            .Where(probe => probe.NextRunAt is null || probe.NextRunAt <= now)
+            .OrderBy(probe => probe.NextRunAt)
+            .Take(256)
+            .Select(probe => probe.Id)
+            .ToList();
     }
 
     private async Task RunProbeAsync(int probeId, CancellationToken stoppingToken)

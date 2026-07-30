@@ -52,9 +52,14 @@ sealed class NotificationWorker(
         var sender = scope.ServiceProvider.GetRequiredService<SmsSender>();
         var now = DateTimeOffset.UtcNow;
         var maxAttempts = Math.Clamp(_options.MaxAttempts, 1, 100);
-        var due = await db.NotificationDeliveryStates
-            .Where(item => item.NextAttemptAt <= now && item.Attempts < maxAttempts)
-            .OrderBy(item => item.NextAttemptAt).Take(20).ToListAsync(cancellationToken);
+        var candidates = await db.NotificationDeliveryStates
+            .Where(item => item.Attempts < maxAttempts)
+            .ToListAsync(cancellationToken);
+        var due = candidates
+            .Where(item => item.NextAttemptAt <= now)
+            .OrderBy(item => item.NextAttemptAt)
+            .Take(20)
+            .ToList();
         foreach (var state in due)
         {
             var incident = await db.Incidents.Include(item => item.Host).SingleOrDefaultAsync(item => item.Id == state.IncidentId, cancellationToken);
