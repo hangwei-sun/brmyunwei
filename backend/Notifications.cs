@@ -51,8 +51,9 @@ sealed class NotificationWorker(
         var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
         var sender = scope.ServiceProvider.GetRequiredService<SmsSender>();
         var now = DateTimeOffset.UtcNow;
+        var maxAttempts = Math.Clamp(_options.MaxAttempts, 1, 100);
         var due = await db.NotificationDeliveryStates
-            .Where(item => item.NextAttemptAt <= now && item.Attempts < Math.Clamp(_options.MaxAttempts, 1, 100))
+            .Where(item => item.NextAttemptAt <= now && item.Attempts < maxAttempts)
             .OrderBy(item => item.NextAttemptAt).Take(20).ToListAsync(cancellationToken);
         foreach (var state in due)
         {

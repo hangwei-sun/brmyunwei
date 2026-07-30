@@ -4,6 +4,7 @@ dist/
 artifacts/
 .playwright-cli/
 backend/.build-probe/
+backend/.build-probe*/
 **/bin/
 **/obj/
 agent/publish/

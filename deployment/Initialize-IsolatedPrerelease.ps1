@@ -45,7 +45,7 @@ $configuration = [ordered]@{
     AllowedHosts = "localhost;$machineName"
     ConnectionStrings = @{ Monitoring = "Data Source=$dataRoot\monitoring.db;Cache=Shared" }
     Authentication = @{ DataProtectionKeysPath = $keysRoot; BootstrapAdmin = @{ Enabled = $false; Username = ''; Password = '' } }
-    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $machineName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
+    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Thumbprint = $certificate.Thumbprint; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
     TencentCloudSms = @{ Enabled = $false; Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
     NotificationContacts = @{ Groups = @{} }
     NotificationWorker = @{ Enabled = $true; ScanSeconds = 5; MaxAttempts = 10 }
