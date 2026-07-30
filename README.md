@@ -28,10 +28,10 @@ dotnet run --project .\agent\tests\MonitoringPlatform.Agent.SelfTests.csproj -c 
 ## 生成预发布包
 
 ```powershell
-.\deployment\Publish-Release.ps1 -Version 0.2.0-rc.5
+.\deployment\Publish-Release.ps1 -Version 0.2.0-rc.6
 ```
 
-发布包位于 `artifacts\monitoring-platform-0.2.0-rc.5-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)。
+发布包位于 `artifacts\monitoring-platform-0.2.0-rc.6-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)。
 
 ## 明确限制
 

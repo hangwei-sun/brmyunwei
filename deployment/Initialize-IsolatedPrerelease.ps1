@@ -62,15 +62,17 @@ Copy-Item -Path (Join-Path $sourceAgent '*') -Destination $agentRoot -Recurse -F
 
 $machineName = [Environment]::MachineName
 $dnsNames = @('localhost', $machineName) | Select-Object -Unique
+$certificateCommonName = "MonitoringPlatform-Prerelease-$machineName-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 $rootCertificate = New-SelfSignedCertificate `
     -Subject "CN=Monitoring Platform Prerelease Root CA - $machineName" `
     -CertStoreLocation 'Cert:\CurrentUser\My' `
     -FriendlyName 'Monitoring Platform Isolated Prerelease Root CA' -NotAfter (Get-Date).AddDays(365) `
     -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable `
-    -KeyUsage CertSign, CRLSign, DigitalSignature `
+    -Type Custom -KeyUsage CertSign, CRLSign, DigitalSignature `
     -TextExtension @('2.5.29.19={critical}{text}ca=1&pathlength=0')
-$certificate = New-SelfSignedCertificate -DnsName $dnsNames -Signer $rootCertificate `
-    -CertStoreLocation 'Cert:\CurrentUser\My' -Type SSLServerAuthentication `
+$certificate = New-SelfSignedCertificate -Subject "CN=$certificateCommonName" -DnsName $dnsNames -Signer $rootCertificate `
+    -CertStoreLocation 'Cert:\CurrentUser\My' -Type Custom -KeyUsage DigitalSignature, KeyEncipherment `
+    -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.1') `
     -FriendlyName 'Monitoring Platform Isolated Prerelease' -NotAfter (Get-Date).AddDays(90) `
     -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable
 $rootPublicCertificate = Join-Path $install 'prerelease-root-ca.cer'
@@ -83,7 +85,7 @@ $configuration = [ordered]@{
     AllowedHosts = "localhost;$machineName"
     ConnectionStrings = @{ Monitoring = "Data Source=$dataRoot\monitoring.db;Cache=Shared" }
     Authentication = @{ DataProtectionKeysPath = $keysRoot; BootstrapAdmin = @{ Enabled = $false; Username = ''; Password = '' } }
-    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Thumbprint = $certificate.Thumbprint; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
+    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $certificateCommonName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
     TencentCloudSms = @{ Enabled = $false; Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
     NotificationContacts = @{ Groups = @{} }
     NotificationWorker = @{ Enabled = $true; ScanSeconds = 5; MaxAttempts = 10 }
@@ -110,7 +112,7 @@ $secretBytes = [Text.Encoding]::UTF8.GetBytes($password)
 $protectedBytes = [Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
 [IO.File]::WriteAllBytes((Join-Path $install 'bootstrap-admin.dpapi'), $protectedBytes)
 
-[ordered]@{ adminUsername = $AdminUsername; certificateThumbprint = $certificate.Thumbprint; rootCertificateThumbprint = $rootCertificate.Thumbprint; httpsPort = $HttpsPort; machineName = $machineName; initializedAt = [DateTimeOffset]::Now.ToString('O') } |
+[ordered]@{ adminUsername = $AdminUsername; certificateSubject = $certificateCommonName; certificateThumbprint = $certificate.Thumbprint; rootCertificateThumbprint = $rootCertificate.Thumbprint; httpsPort = $HttpsPort; machineName = $machineName; initializedAt = [DateTimeOffset]::Now.ToString('O') } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $install 'initialized.json') -Encoding utf8
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 & icacls.exe $install /inheritance:r /grant:r "$identity`:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' | Out-Null
