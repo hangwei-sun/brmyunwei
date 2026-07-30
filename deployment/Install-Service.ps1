@@ -19,14 +19,30 @@ function Test-PathUnderRoot {
     return $resolvedPath.StartsWith($resolvedRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Grant-CertificatePrivateKeyRead {
-    param([string]$CertificateSha256, [string]$Identity)
-    $expected = $CertificateSha256.Replace(' ', '').Replace(':', '').ToUpperInvariant()
+function ConvertTo-NormalizedSha256 {
+    param([string]$Value)
+    return $Value.Replace(' ', '').Replace(':', '').ToUpperInvariant()
+}
+
+function Get-CertificateSha256 {
+    param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+    return ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($Certificate.RawData))).Replace('-', '')
+}
+
+function Get-PinnedCertificate {
+    param([string]$CertificateSha256)
+    $expected = ConvertTo-NormalizedSha256 $CertificateSha256
     $matches = @(Get-ChildItem Cert:\LocalMachine\My | Where-Object {
         $_.HasPrivateKey -and ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($_.RawData))).Replace('-', '') -eq $expected
     })
-    if ($matches.Count -ne 1) { throw "Exactly one LocalMachine\\My certificate with private key must match SHA-256 $expected." }
-    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($matches[0])
+    if ($matches.Count -ne 1) { throw "Exactly one LocalMachine\My certificate with private key must match SHA-256 $expected." }
+    return $matches[0]
+}
+
+function Grant-CertificatePrivateKeyRead {
+    param([string]$CertificateSha256, [string]$Identity)
+    $certificate = Get-PinnedCertificate $CertificateSha256
+    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
     try {
         if ($rsa -is [Security.Cryptography.RSACryptoServiceProvider]) {
             $keyPath = Join-Path "$env:ProgramData\Microsoft\Crypto\RSA\MachineKeys" $rsa.CspKeyContainerInfo.UniqueKeyContainerName
@@ -56,6 +72,71 @@ if (-not (Test-Path -LiteralPath (Join-Path $sourceApp 'MonitoringPlatform.Api.e
 }
 if (-not (Test-Path -LiteralPath $sourceConfig -PathType Leaf)) {
     throw 'Create appsettings.Production.json from the supplied template before installation.'
+}
+try {
+    $centerConfig = Get-Content -LiteralPath $sourceConfig -Raw | ConvertFrom-Json
+}
+catch {
+    throw "Center configuration is not valid JSON: $($_.Exception.Message)"
+}
+$certificateConfig = $centerConfig.Kestrel.Endpoints.Https.Certificate
+if (-not $certificateConfig -or [string]::IsNullOrWhiteSpace($certificateConfig.Subject) -or
+    $certificateConfig.Store -ne 'My' -or $certificateConfig.Location -ne 'LocalMachine' -or $certificateConfig.AllowInvalid -ne $false) {
+    throw 'Center HTTPS certificate must use an exact subject from LocalMachine\My with AllowInvalid=false.'
+}
+$providedPins = @($PrivateKeyCertificateSha256 | ForEach-Object { ConvertTo-NormalizedSha256 $_ } | Select-Object -Unique)
+$pinnedCertificates = @($providedPins | ForEach-Object { Get-PinnedCertificate $_ })
+$httpsStore = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine')
+try {
+    $httpsStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+    $kestrelMatches = @($httpsStore.Certificates.Find(
+        [Security.Cryptography.X509Certificates.X509FindType]::FindBySubjectName,
+        [string]$certificateConfig.Subject, $true) | Where-Object { $_.HasPrivateKey })
+}
+finally {
+    $httpsStore.Close()
+}
+if ($kestrelMatches.Count -ne 1) {
+    throw 'Kestrel certificate lookup must resolve to exactly one valid LocalMachine\My certificate with a private key.'
+}
+$httpsCertificate = $kestrelMatches[0]
+$httpsPin = Get-CertificateSha256 $httpsCertificate
+if ($httpsPin -notin $providedPins -or
+    -not ($httpsCertificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' })) {
+    throw 'The Kestrel-selected HTTPS certificate must match a supplied SHA-256 pin and include the Server Authentication EKU.'
+}
+$requiredPins = @($httpsPin)
+if ($centerConfig.AgentEnrollment.Enabled) {
+    if ([string]::IsNullOrWhiteSpace($centerConfig.AgentEnrollment.IssuerCertificateSubject) -or
+        $centerConfig.AgentEnrollment.IssuerStoreName -ne 'My' -or $centerConfig.AgentEnrollment.IssuerStoreLocation -ne 'LocalMachine') {
+        throw 'Enabled Agent enrollment must use an exact issuer subject from LocalMachine\My.'
+    }
+    $issuerPin = ConvertTo-NormalizedSha256 ([string]$centerConfig.AgentEnrollment.IssuerCertificateSha256)
+    if (-not [regex]::IsMatch($issuerPin, '^[A-F0-9]{64}$')) {
+        throw 'Agent enrollment issuer SHA-256 must contain exactly 64 hexadecimal characters.'
+    }
+    $issuerCertificates = @($pinnedCertificates | Where-Object {
+        (Get-CertificateSha256 $_) -eq $issuerPin -and
+        $_.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -eq [string]$centerConfig.AgentEnrollment.IssuerCertificateSubject
+    })
+    $issuerConstraints = if ($issuerCertificates.Count -eq 1) {
+        $issuerCertificates[0].Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] }
+    }
+    $issuerKeyUsage = if ($issuerCertificates.Count -eq 1) {
+        $issuerCertificates[0].Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509KeyUsageExtension] }
+    }
+    if ($issuerCertificates.Count -ne 1 -or $issuerCertificates[0].NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow -or
+        $issuerCertificates[0].NotAfter.ToUniversalTime() -le [DateTime]::UtcNow.AddDays(7) -or
+        -not $issuerConstraints -or -not $issuerConstraints.CertificateAuthority -or -not $issuerKeyUsage -or
+        ($issuerKeyUsage.KeyUsages -band [Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign) -eq 0) {
+        throw 'The enabled Agent enrollment issuer must match its configured subject and SHA-256 pin and be a valid certificate-signing CA.'
+    }
+    $requiredPins += $issuerPin
+}
+$requiredPins = @($requiredPins | Select-Object -Unique)
+if (@($providedPins | Where-Object { $_ -notin $requiredPins }).Count -ne 0 -or
+    @($requiredPins | Where-Object { $_ -notin $providedPins }).Count -ne 0) {
+    throw 'PrivateKeyCertificateSha256 must contain only the HTTPS and enabled Agent enrollment issuer certificate pins referenced by configuration.'
 }
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     throw "Service $ServiceName already exists. Use the documented upgrade procedure."

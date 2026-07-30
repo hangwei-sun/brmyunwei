@@ -76,9 +76,35 @@ $certificate = New-SelfSignedCertificate -Subject "CN=$certificateCommonName" -D
     -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.1') `
     -FriendlyName 'Monitoring Platform Isolated Prerelease' -NotAfter (Get-Date).AddDays(90) `
     -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable
+$rootCertificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rootCertificate.RawData))).Replace('-', '')
+if (-not $rootCertificate.HasPrivateKey -or -not $certificate.HasPrivateKey -or
+    $certificate.Issuer -ne $rootCertificate.Subject -or $certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow.AddDays(7) -or
+    -not ($certificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' })) {
+    throw 'Generated prerelease TLS certificate failed private-key, issuer, lifetime, or Server Authentication EKU validation.'
+}
+$rootConstraints = $rootCertificate.Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] }
+$rootKeyUsage = $rootCertificate.Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509KeyUsageExtension] }
+if (-not $rootConstraints -or -not $rootConstraints.CertificateAuthority -or -not $rootKeyUsage -or
+    ($rootKeyUsage.KeyUsages -band [Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign) -eq 0) {
+    throw 'Generated prerelease root certificate is not a certificate-signing authority.'
+}
+$chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+try {
+    $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $chain.ChainPolicy.VerificationFlags = [Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
+    [void]$chain.ChainPolicy.ExtraStore.Add($rootCertificate)
+    $chainValid = $chain.Build($certificate)
+    $chainRoot = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
+    $chainRootSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($chainRoot.RawData))).Replace('-', '')
+    if (-not $chainValid -or $chainRootSha256 -ne $rootCertificateSha256) {
+        throw 'Generated prerelease TLS certificate does not chain to the generated root certificate.'
+    }
+}
+finally {
+    $chain.Dispose()
+}
 $rootPublicCertificate = Join-Path $install 'prerelease-root-ca.cer'
 $publicCertificate = Join-Path $install 'prerelease-server.cer'
-$rootCertificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rootCertificate.RawData))).Replace('-', '')
 Export-Certificate -Cert $rootCertificate -FilePath $rootPublicCertificate -Force | Out-Null
 Export-Certificate -Cert $certificate -FilePath $publicCertificate -Force | Out-Null
 
