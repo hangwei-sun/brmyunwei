@@ -153,7 +153,7 @@ signtool.exe, and WiX Toolset v4. That process signs the executable, delivery sc
         $relative = [System.IO.Path]::GetRelativePath($releaseRoot, $_.FullName)
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $relative"
-    } | Set-Content -LiteralPath (Join-Path $releaseRoot 'SHA256SUMS') -Encoding ascii
+    } | Set-Content -LiteralPath (Join-Path $releaseRoot 'SHA256SUMS') -Encoding utf8
 
     Compress-Archive -LiteralPath $releaseRoot -DestinationPath $archivePath -CompressionLevel Optimal
     Write-Host "Release created: $archivePath"
