@@ -1,0 +1,83 @@
+[CmdletBinding()]
+param(
+    [string]$InstallRoot = "$env:LOCALAPPDATA\MonitoringPlatform-Prerelease",
+    [string]$AdminUsername = 'prerelease-admin',
+    [ValidateRange(1024, 65535)]
+    [int]$HttpsPort = 8443
+)
+
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
+$packageRoot = $PSScriptRoot
+$sourceApp = Join-Path $packageRoot 'app'
+$sourceAgent = Join-Path $packageRoot 'agent'
+$install = [System.IO.Path]::GetFullPath($InstallRoot)
+$currentUserRoot = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA)
+if (-not $install.StartsWith($currentUserRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The isolated prerelease must remain under the current user LocalAppData directory.'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $sourceApp 'MonitoringPlatform.Api.exe') -PathType Leaf)) {
+    throw 'Run this script from an extracted release package.'
+}
+if (Test-Path -LiteralPath (Join-Path $install 'initialized.json')) {
+    throw "Prerelease is already initialized: $install"
+}
+
+$appRoot = Join-Path $install 'app'
+$dataRoot = Join-Path $install 'data'
+$backupRoot = Join-Path $install 'backup'
+$keysRoot = Join-Path $install 'keys'
+$agentRoot = Join-Path $install 'agent-package'
+New-Item -ItemType Directory -Path $appRoot, $dataRoot, $backupRoot, $keysRoot, $agentRoot -Force | Out-Null
+Copy-Item -Path (Join-Path $sourceApp '*') -Destination $appRoot -Recurse -Force
+Copy-Item -Path (Join-Path $sourceAgent '*') -Destination $agentRoot -Recurse -Force
+
+$machineName = [Environment]::MachineName
+$dnsNames = @('localhost', $machineName) | Select-Object -Unique
+$certificate = New-SelfSignedCertificate -DnsName $dnsNames -CertStoreLocation 'Cert:\CurrentUser\My' `
+    -FriendlyName 'Monitoring Platform Isolated Prerelease' -NotAfter (Get-Date).AddDays(90) `
+    -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable
+$publicCertificate = Join-Path $install 'prerelease-server.cer'
+Export-Certificate -Cert $certificate -FilePath $publicCertificate -Force | Out-Null
+Import-Certificate -FilePath $publicCertificate -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
+
+$configuration = [ordered]@{
+    AllowedHosts = "localhost;$machineName"
+    ConnectionStrings = @{ Monitoring = "Data Source=$dataRoot\monitoring.db;Cache=Shared" }
+    Authentication = @{ DataProtectionKeysPath = $keysRoot; BootstrapAdmin = @{ Enabled = $false; Username = ''; Password = '' } }
+    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $machineName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
+    TencentCloudSms = @{ Enabled = $false; Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
+    NotificationContacts = @{ Groups = @{} }
+    NotificationWorker = @{ Enabled = $true; ScanSeconds = 5; MaxAttempts = 10 }
+    ProbeWorker = @{ Enabled = $true; MaxConcurrency = 8; LoopDelaySeconds = 1; MaxBackoffSeconds = 900; JitterMilliseconds = 500 }
+    AgentHealth = @{ Enabled = $true; ScanSeconds = 15; OfflineSeconds = 180 }
+    DataMaintenance = @{ Enabled = $true; MetricDays = 30; ResolvedIncidentDays = 365; AuditDays = 730; RunHourLocal = 2; BackupDirectory = $backupRoot; BackupKeepDays = 30 }
+}
+$configuration | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $appRoot 'appsettings.Production.json') -Encoding utf8
+
+function New-RandomPart([string]$Characters, [int]$Length) {
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $bytes = New-Object byte[] 4
+        -join (1..$Length | ForEach-Object {
+            $rng.GetBytes($bytes)
+            $Characters[[BitConverter]::ToUInt32($bytes, 0) % $Characters.Length]
+        })
+    }
+    finally { $rng.Dispose() }
+}
+$password = (New-RandomPart 'ABCDEFGHJKLMNPQRSTUVWXYZ' 5) + (New-RandomPart 'abcdefghijkmnopqrstuvwxyz' 7) + `
+    (New-RandomPart '23456789' 5) + (New-RandomPart '!@$%*_-+' 5)
+$secretBytes = [Text.Encoding]::UTF8.GetBytes($password)
+$protectedBytes = [Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+[IO.File]::WriteAllBytes((Join-Path $install 'bootstrap-admin.dpapi'), $protectedBytes)
+
+[ordered]@{ adminUsername = $AdminUsername; certificateThumbprint = $certificate.Thumbprint; httpsPort = $HttpsPort; machineName = $machineName; initializedAt = [DateTimeOffset]::Now.ToString('O') } |
+    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $install 'initialized.json') -Encoding utf8
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+& icacls.exe $install /inheritance:r /grant:r "$identity`:(OI)(CI)F" 'SYSTEM:(OI)(CI)F' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the isolated prerelease directory.' }
+
+Write-Host "Initialized isolated prerelease: $install"
+Write-Host "HTTPS URL: https://localhost:$HttpsPort"
+Write-Host "Public certificate for approved test servers: $publicCertificate"

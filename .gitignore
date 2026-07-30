@@ -1,8 +1,12 @@
 node_modules/
 .npm-cache/
 dist/
+artifacts/
+.playwright-cli/
+backend/.build-probe/
 **/bin/
 **/obj/
+agent/publish/
 backend/Data/*.db
 backend/Data/*.db-wal
 backend/Data/*.db-shm

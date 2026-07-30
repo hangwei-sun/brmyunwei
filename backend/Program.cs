@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService(options => options.ServiceName = "MonitoringPlatform");
 
 var configuredConnection = builder.Configuration.GetConnectionString("Monitoring");
 var databasePath = Path.Combine(builder.Environment.ContentRootPath, "Data", "monitoring.db");
@@ -40,6 +41,18 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization(SecurityPolicies.Configure);
 builder.Services.AddScoped<IPasswordHasher<LocalUser>, PasswordHasher<LocalUser>>();
 builder.Services.Configure<SmsOptions>(builder.Configuration.GetSection("TencentCloudSms"));
+builder.Services.Configure<ProbeWorkerOptions>(builder.Configuration.GetSection(ProbeWorkerOptions.SectionName));
+builder.Services.Configure<DataMaintenanceOptions>(builder.Configuration.GetSection(DataMaintenanceOptions.SectionName));
+builder.Services.Configure<AgentHealthOptions>(builder.Configuration.GetSection(AgentHealthOptions.SectionName));
+builder.Services.Configure<NotificationContactOptions>(builder.Configuration.GetSection(NotificationContactOptions.SectionName));
+builder.Services.Configure<NotificationWorkerOptions>(builder.Configuration.GetSection(NotificationWorkerOptions.SectionName));
+builder.Services.AddHttpClient("probe", client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<IProbeExecutor, NetworkProbeExecutor>();
+builder.Services.AddHostedService<ProbeWorker>();
+builder.Services.AddHostedService<DataMaintenanceWorker>();
+builder.Services.AddHostedService<AgentHealthWorker>();
+builder.Services.AddHostedService<NotificationWorker>();
 builder.Services.AddScoped<SmsSender>();
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login", limiter =>
 {
@@ -58,6 +71,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
     app.UseHttpsRedirection();
 }
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -86,11 +101,24 @@ await using (var scope = app.Services.CreateAsyncScope())
     var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
     await db.Database.EnsureCreatedAsync();
     await SecuritySchema.EnsureAsync(db);
-    await SeedData.EnsureAsync(db);
+    await SeedData.EnsureAsync(db, app.Environment.IsDevelopment());
     await LocalUserBootstrap.EnsureAsync(scope.ServiceProvider, builder.Configuration, app.Environment);
 }
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", utc = DateTimeOffset.UtcNow }));
+app.MapGet("/api/health", async (MonitoringDbContext db, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var connected = await db.Database.CanConnectAsync(cancellationToken);
+        return connected
+            ? Results.Ok(new { status = "healthy", database = "connected", utc = DateTimeOffset.UtcNow })
+            : Results.Json(new { status = "unhealthy", database = "unavailable", utc = DateTimeOffset.UtcNow }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch
+    {
+        return Results.Json(new { status = "unhealthy", database = "unavailable", utc = DateTimeOffset.UtcNow }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
 
 app.MapPost("/api/auth/login", async (LoginRequest request, MonitoringDbContext db, IPasswordHasher<LocalUser> hasher) =>
 {
@@ -208,11 +236,22 @@ read.MapGet("/hosts/{name}/metrics", async (string name, MonitoringDbContext db)
         .Select(sample => new { sample.CollectedAt, sample.Cpu, sample.Memory, sample.Disk, sample.Latency });
     return Results.Ok(samples);
 });
+read.MapGet("/hosts/{name}/services", async (string name, MonitoringDbContext db) =>
+{
+    var host = await db.Hosts.SingleOrDefaultAsync(item => item.Name == name.ToUpperInvariant());
+    return host is null ? Results.NotFound() : Results.Ok(await db.HostServiceStatuses.Where(item => item.HostId == host.Id)
+        .OrderBy(item => item.Name).Select(item => new HostServiceStatusDto(item.Name, item.Status, item.UpdatedAt)).ToListAsync());
+});
 read.MapGet("/incidents", async (MonitoringDbContext db) => Results.Ok(
     (await db.Incidents.Include(item => item.Host).ToListAsync())
     .OrderByDescending(item => item.StartedAt).Select(IncidentDto.From)));
 read.MapGet("/rules", async (MonitoringDbContext db) => Results.Ok(await db.AlertRules.OrderBy(item => item.Id).ToListAsync()));
 read.MapGet("/notification-policies", async (MonitoringDbContext db) => Results.Ok(await db.NotificationPolicies.OrderBy(item => item.Id).ToListAsync()));
+read.MapGet("/notification-deliveries", async (MonitoringDbContext db) => Results.Ok(await db.NotificationDeliveryStates
+    .OrderByDescending(item => item.LastAttemptAt).Take(200)
+    .Select(item => new NotificationDeliveryDto(item.IncidentId, item.NotificationPolicyId, item.Status, item.Attempts, item.LastAttemptAt, item.LastSentAt, item.NextAttemptAt, item.LastError)).ToListAsync()));
+read.MapGet("/probes", async (MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).OrderBy(probe => probe.Host!.Name).ThenBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
+read.MapGet("/hosts/{name}/probes", async (string name, MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).Where(probe => probe.Host!.Name == name.ToUpperInvariant()).OrderBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/ha", () => Results.Ok(HaCapability.Current));
 var operations = app.MapGroup("/api").RequireAuthorization(SecurityPolicies.Operator);
 operations.MapGet("/audit", async (MonitoringDbContext db) => Results.Ok(
@@ -231,7 +270,7 @@ administration.MapPost("/hosts", async (HostRequest request, ClaimsPrincipal pri
     if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["host"] = [error] });
     var name = request.Name.Trim().ToUpperInvariant();
     if (await db.Hosts.AnyAsync(host => host.Name == name)) return Results.Conflict(new { error = "服务器名称已存在。" });
-    var host = new Host { Name = name, Ip = request.Ip.Trim(), Room = request.Room.Trim(), Service = request.Service.Trim(), Status = "未知", LastHeartbeatAt = DateTimeOffset.UtcNow };
+    var host = new Host { Name = name, Ip = request.Ip.Trim(), Room = request.Room.Trim(), Service = request.Service.Trim(), Group = string.IsNullOrWhiteSpace(request.Group) ? "默认组" : request.Group.Trim(), Status = "未知", LastHeartbeatAt = DateTimeOffset.UtcNow };
     db.Hosts.Add(host);
     await Audit.AddAsync(db, principal, "添加资产", $"{host.Name} ({host.Ip})");
     await db.SaveChangesAsync();
@@ -245,7 +284,7 @@ administration.MapPut("/hosts/{name}", async (string name, HostRequest request, 
     if (host is null) return Results.NotFound();
     var nextName = request.Name.Trim().ToUpperInvariant();
     if (nextName != host.Name && await db.Hosts.AnyAsync(item => item.Name == nextName)) return Results.Conflict(new { error = "服务器名称已存在。" });
-    host.Name = nextName; host.Ip = request.Ip.Trim(); host.Room = request.Room.Trim(); host.Service = request.Service.Trim();
+    host.Name = nextName; host.Ip = request.Ip.Trim(); host.Room = request.Room.Trim(); host.Service = request.Service.Trim(); host.Group = string.IsNullOrWhiteSpace(request.Group) ? host.Group : request.Group.Trim();
     await Audit.AddAsync(db, principal, "修改资产", $"{host.Name} ({host.Ip})");
     await db.SaveChangesAsync();
     return Results.Ok(HostDto.From(host));
@@ -283,32 +322,125 @@ administration.MapPost("/hosts/{name}/agent-key", async (string name, ClaimsPrin
     await db.SaveChangesAsync();
     return Results.Ok(new AgentKeyResponse(host.Name, plainTextKey, credential.RotatedAt));
 });
+administration.MapPost("/hosts/{name}/probes", async (string name, ProbeRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var error = Validation.ValidateProbe(request);
+    if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["probe"] = [error] });
+    var host = await db.Hosts.SingleOrDefaultAsync(item => item.Name == name.ToUpperInvariant());
+    if (host is null) return Results.NotFound();
+    var fingerprint = ProbeFingerprint.Create(request);
+    if (await db.ProbeDefinitions.AnyAsync(item => item.HostId == host.Id && item.Fingerprint == fingerprint))
+        return Results.Conflict(new { error = "该服务器已存在相同目标的探测定义。" });
+    var now = DateTimeOffset.UtcNow;
+    var probe = new ProbeDefinition
+    {
+        HostId = host.Id,
+        Name = request.Name.Trim(),
+        Type = request.Type.Trim().ToLowerInvariant(),
+        Target = request.Target.Trim(),
+        Port = request.Port,
+        ExpectedStatus = request.ExpectedStatus,
+        Fingerprint = fingerprint,
+        Enabled = request.Enabled,
+        IntervalSeconds = request.IntervalSeconds,
+        TimeoutMilliseconds = request.TimeoutMilliseconds,
+        FailureThreshold = request.FailureThreshold,
+        RecoveryThreshold = request.RecoveryThreshold,
+        NextRunAt = request.Enabled ? now : null,
+        CreatedAt = now,
+        UpdatedAt = now
+    };
+    db.ProbeDefinitions.Add(probe);
+    await Audit.AddAsync(db, principal, "添加网络探测", $"{host.Name}: {probe.Name} ({probe.Type})");
+    await db.SaveChangesAsync();
+    probe.Host = host;
+    return Results.Created($"/api/probes/{probe.Id}", ProbeDto.From(probe));
+});
+administration.MapPut("/probes/{id:int}", async (int id, ProbeRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var error = Validation.ValidateProbe(request);
+    if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["probe"] = [error] });
+    var probe = await db.ProbeDefinitions.Include(item => item.Host).SingleOrDefaultAsync(item => item.Id == id);
+    if (probe is null) return Results.NotFound();
+    var fingerprint = ProbeFingerprint.Create(request);
+    if (await db.ProbeDefinitions.AnyAsync(item => item.HostId == probe.HostId && item.Id != id && item.Fingerprint == fingerprint))
+        return Results.Conflict(new { error = "该服务器已存在相同目标的探测定义。" });
+    var now = DateTimeOffset.UtcNow;
+    if (!string.Equals(probe.Fingerprint, fingerprint, StringComparison.Ordinal))
+        await ProbeIncidentService.ResolveForConfigurationChangeAsync(db, probe, "探测目标已修改，自动关闭原事件。", now);
+    probe.Name = request.Name.Trim(); probe.Type = request.Type.Trim().ToLowerInvariant(); probe.Target = request.Target.Trim(); probe.Port = request.Port;
+    probe.ExpectedStatus = request.ExpectedStatus; probe.Fingerprint = fingerprint; probe.Enabled = request.Enabled; probe.IntervalSeconds = request.IntervalSeconds;
+    probe.TimeoutMilliseconds = request.TimeoutMilliseconds; probe.FailureThreshold = request.FailureThreshold; probe.RecoveryThreshold = request.RecoveryThreshold;
+    probe.ConsecutiveFailures = 0; probe.ConsecutiveSuccesses = 0; probe.BackoffLevel = 0; probe.Status = ProbeStatus.Unknown; probe.LastError = null;
+    probe.NextRunAt = request.Enabled ? now : null; probe.UpdatedAt = now;
+    await Audit.AddAsync(db, principal, "更新网络探测", $"{probe.Host?.Name}: {probe.Name} ({probe.Type})");
+    await db.SaveChangesAsync();
+    return Results.Ok(ProbeDto.From(probe));
+});
+administration.MapDelete("/probes/{id:int}", async (int id, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var probe = await db.ProbeDefinitions.Include(item => item.Host).SingleOrDefaultAsync(item => item.Id == id);
+    if (probe is null) return Results.NotFound();
+    await ProbeIncidentService.ResolveForConfigurationChangeAsync(db, probe, "探测定义已删除，自动关闭原事件。", DateTimeOffset.UtcNow);
+    db.ProbeDefinitions.Remove(probe);
+    await Audit.AddAsync(db, principal, "删除网络探测", $"{probe.Host?.Name}: {probe.Name}");
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
 administration.MapPut("/rules/{id:int}", async (int id, AlertRuleUpdate request, ClaimsPrincipal principal, MonitoringDbContext db) =>
 {
     var rule = await db.AlertRules.FindAsync(id);
     if (rule is null) return Results.NotFound();
-    rule.Enabled = request.Enabled; rule.WarningThreshold = request.WarningThreshold; rule.CriticalThreshold = request.CriticalThreshold; rule.UpdatedAt = DateTimeOffset.UtcNow;
+    if (!double.IsFinite(request.WarningThreshold) || !double.IsFinite(request.CriticalThreshold) || request.WarningThreshold < 0 || request.CriticalThreshold < 0 || request.TriggerCount is < 1 or > 60 || request.RecoveryCount is < 1 or > 60)
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["rule"] = ["阈值必须为非负数，连续触发/恢复次数必须在 1 到 60 之间。"] });
+    rule.Enabled = request.Enabled; rule.WarningThreshold = request.WarningThreshold; rule.CriticalThreshold = request.CriticalThreshold; rule.TriggerCount = request.TriggerCount; rule.RecoveryCount = request.RecoveryCount; rule.UpdatedAt = DateTimeOffset.UtcNow;
     await Audit.AddAsync(db, principal, "更新告警规则", rule.Name);
     await db.SaveChangesAsync();
     return Results.Ok(rule);
 });
-administration.MapPut("/notification-policies/{id:int}", async (int id, NotificationPolicyUpdate request, ClaimsPrincipal principal, MonitoringDbContext db) =>
+administration.MapPost("/notification-policies", async (NotificationPolicyRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
 {
+    var error = Validation.ValidateNotificationPolicy(request);
+    if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["policy"] = [error] });
+    var policy = new NotificationPolicy { Name = request.Name.Trim(), ServerGroup = request.ServerGroup.Trim(), Severity = request.Severity, ContactGroup = request.ContactGroup.Trim(), Enabled = request.Enabled, RepeatMinutes = request.RepeatMinutes, UpdatedAt = DateTimeOffset.UtcNow };
+    db.NotificationPolicies.Add(policy);
+    await Audit.AddAsync(db, principal, "创建通知策略", policy.Name);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/notification-policies/{policy.Id}", policy);
+});
+administration.MapPut("/notification-policies/{id:int}", async (int id, NotificationPolicyRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var error = Validation.ValidateNotificationPolicy(request);
+    if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["policy"] = [error] });
     var policy = await db.NotificationPolicies.FindAsync(id);
     if (policy is null) return Results.NotFound();
-    policy.Enabled = request.Enabled; policy.RepeatMinutes = request.RepeatMinutes; policy.UpdatedAt = DateTimeOffset.UtcNow;
+    policy.Name = request.Name.Trim(); policy.ServerGroup = request.ServerGroup.Trim(); policy.Severity = request.Severity; policy.ContactGroup = request.ContactGroup.Trim(); policy.Enabled = request.Enabled; policy.RepeatMinutes = request.RepeatMinutes; policy.UpdatedAt = DateTimeOffset.UtcNow;
     await Audit.AddAsync(db, principal, "更新通知策略", policy.Name);
     await db.SaveChangesAsync();
     return Results.Ok(policy);
+});
+administration.MapDelete("/notification-policies/{id:int}", async (int id, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var policy = await db.NotificationPolicies.FindAsync(id);
+    if (policy is null) return Results.NotFound();
+    db.NotificationPolicies.Remove(policy);
+    await Audit.AddAsync(db, principal, "删除通知策略", policy.Name);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 });
 administration.MapPost("/notifications/test-sms", async (SmsTestRequest request, SmsSender sender) =>
 {
     var result = await sender.SendAsync(request.PhoneNumbers, request.TemplateParameters);
     return result.Sent ? Results.Ok(result) : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
 });
+administration.MapPost("/maintenance/backup", async (MonitoringDbContext db, Microsoft.Extensions.Options.IOptions<DataMaintenanceOptions> options, IWebHostEnvironment environment, ILogger<DataMaintenanceWorker> logger, CancellationToken cancellationToken) =>
+{
+    var result = await DataMaintenanceWorker.BackupNowAsync(db, options.Value, environment, logger, cancellationToken);
+    return Results.Ok(result);
+});
 
 // Deliberately no failover mutation endpoint: this process currently has no real HA coordinator.
-app.MapPost("/api/v1/agents/ingest", async (AgentIngestRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
+app.MapPost("/api/v1/agents/ingest", async (AgentIngestRequest request, ClaimsPrincipal principal, MonitoringDbContext db, CancellationToken cancellationToken) =>
 {
     var authenticatedHost = principal.FindFirstValue(SecurityClaims.AgentHost);
     if (!string.Equals(authenticatedHost, request.HostName, StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
@@ -319,12 +451,20 @@ app.MapPost("/api/v1/agents/ingest", async (AgentIngestRequest request, ClaimsPr
         return Results.ValidationProblem(new Dictionary<string, string[]> { ["collectedAt"] = ["采集时间超出允许窗口。"] });
     if (!Validation.ValidMetric(request.Cpu) || !Validation.ValidMetric(request.Memory) || !Validation.ValidMetric(request.Disk) || request.Latency < 0 || request.Latency > 120000)
         return Results.ValidationProblem(new Dictionary<string, string[]> { ["metrics"] = ["指标值超出允许范围。"] });
-    host.Cpu = request.Cpu; host.Memory = request.Memory; host.Disk = request.Disk; host.Latency = request.Latency;
-    host.LastHeartbeatAt = DateTimeOffset.UtcNow; host.LastSequence = request.Sequence; host.Status = "健康";
+    if (AgentTelemetry.Validate(request) is { } telemetryError)
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["telemetry"] = [telemetryError] });
+    await AgentTelemetry.ApplyAsync(db, host, request, DateTimeOffset.UtcNow, cancellationToken);
     db.MetricSamples.Add(new MetricSample { HostId = host.Id, CollectedAt = request.CollectedAt, Cpu = request.Cpu, Memory = request.Memory, Disk = request.Disk, Latency = request.Latency });
     await db.SaveChangesAsync();
     return Results.Accepted();
 }).RequireAuthorization(SecurityPolicies.Agent);
+
+app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api")) return Results.NotFound();
+    var indexPath = Path.Combine(environment.ContentRootPath, "wwwroot", "index.html");
+    return File.Exists(indexPath) ? Results.File(indexPath, "text/html; charset=utf-8") : Results.NotFound();
+}).AllowAnonymous();
 
 app.Run();
 

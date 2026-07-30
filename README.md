@@ -1,46 +1,41 @@
-# 机房运维监控平台
+# 轻量化 Windows 机房运维监控平台
 
-本项目当前提供 React 运维面板和 .NET 10 单节点中心端 API。开发态数据保存在 `backend/Data/monitoring.db`，首次运行会自动写入示例资产、规则、通知策略和指标数据。当前版本已经具备本地账号登录和服务端角色授权，但仍然是开发版，不能直接部署到生产环境。
+当前版本定位为 **单节点、隔离预发布**。主备、自动故障转移和生产上线评审暂缓；先在一台 Windows 11 控制端和 1 至 2 台非关键 Windows 服务器上静默运行并收集证据。
 
-## 本地地址
+## 当前能力
 
-- 面板：`http://127.0.0.1:5173`
-- 中心端 API：`http://127.0.0.1:5090`
+- React 19 运维控制台：总览、资产、事件、告警规则、通知策略、本地账号和角色权限。
+- .NET 10 中心端：本地 Bearer 登录、`Admin / Operator / Viewer` RBAC、SQLite、审计和 HTTPS 托管。
+- ICMP、TCP、HTTP(S) 探测：并发上限、超时、随机抖动、失败退避、连续失败/恢复状态机和事件去重。
+- Windows Agent：`.NET Framework 4.8`，兼容 Windows Server 2012/2012 R2；仅出站 HTTPS、只读采集、无监听端口、无远程命令。
+- Agent 指标：CPU、内存、磁盘、网络、启动时间、指定 Windows 服务；可识别失联、重启、服务停止和阈值异常。
+- 腾讯云短信：完整通知策略契约、服务器组匹配、联系人组、重试退避、重复提醒和每事件/策略去重。预发布默认关闭真实短信。
+- 数据维护：原始指标保留、审计/事件保留、SQLite 在线备份、SHA-256 校验和停机恢复脚本。
+- Windows 发布：中心端 `win-x64` 自包含包；Agent 为 `net48` 轻量包。
 
-## 已实现的中心端能力
+## 验证
 
-- SQLite 持久化的资产、指标、事件、告警规则、通知策略、主备状态和审计记录。
-- 事件确认、临时静默和进入维护 API。
-- 主备计划内切换 API，切换操作写入审计日志。
-- 代理指标上报 API：`POST /api/v1/agents/ingest`，包含顺序号校验。
-- 腾讯云短信 SDK 适配层。未配置凭据时安全地返回 `503`，不会模拟发送成功。
-- 本地账号 Bearer 登录以及 `Admin / Operator / Viewer` 服务端授权。
-- Agent 独立 Key、主机绑定、序列号防重放和指标范围校验。
-- 安全集成测试和前端 API 单元测试。
-
-## 腾讯云短信配置
-
-不要将凭据写入仓库。通过受保护的部署配置或环境变量提供以下值：
-
-```json
-{
-  "TencentCloudSms": {
-    "SecretId": "",
-    "SecretKey": "",
-    "Region": "ap-guangzhou",
-    "SdkAppId": "",
-    "SignName": "",
-    "TemplateId": ""
-  }
-}
+```powershell
+npm test
+npm run build
+dotnet test .\backend\tests\MonitoringPlatform.Api.Tests.csproj -c Release
+dotnet build .\agent\MonitoringPlatform.Agent.csproj -c Release
+dotnet run --project .\agent\tests\MonitoringPlatform.Agent.SelfTests.csproj -c Release
 ```
 
-生产部署还需要在 Windows 上使用 DPAPI 保护该配置，并在代理端实施 mTLS 注册和证书轮换。当前开发版没有保存任何腾讯云凭据。
+当前自动化覆盖 9 项前端测试、10 项后端安全/探测/Agent/通知/备份测试和 Agent 自测。CI 同时执行依赖漏洞扫描。
 
-## 上线前必做项
+## 生成预发布包
 
-- 完成 Agent 的一次性注册令牌、mTLS、重放防护及 Windows 服务安装包。
-- 在两台独立 Windows 节点运行中心端，并实现配置与事件复制及外部仲裁。
-- 完成真实 ICMP/TCP/HTTP 探测、告警状态机、短信队列、数据清理和备份。
+```powershell
+.\deployment\Publish-Release.ps1 -Version 0.2.0-rc.1
+```
 
-详细阶段、Agent 分工和上线门禁见 [开发计划.md](./开发计划.md)。
+发布包位于 `artifacts\monitoring-platform-0.2.0-rc.1-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)。
+
+## 明确限制
+
+- 当前为单节点。`/api/ha` 明确返回 `single-node`，不存在伪切换接口。
+- Agent 目前使用每主机静态高熵 Key，尚未实现一次性注册和 mTLS；只允许在隔离灰度网段使用。
+- 自签预发布证书只用于隔离验收；生产必须替换为单位受信任证书。
+- 未完成连续数日静默运行、真实 Windows Server 2012 资源测量和恢复演练前，不进入生产上线评审。

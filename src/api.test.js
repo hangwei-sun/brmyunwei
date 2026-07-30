@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, clearAccessToken, getDashboard, login, normalizeDashboard, requestJson, setAccessToken } from "./api.js";
+import { ApiError, clearAccessToken, getDashboard, login, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateUser } from "./api.js";
 
 test("requestJson returns a successful JSON payload", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ ok: true }), {
@@ -73,4 +73,28 @@ test("getDashboard rejects malformed successful responses", async (t) => {
     assert.equal(error.status, 502);
     return true;
   });
+});
+
+test("updateRule serializes only the alert-rule update contract", async (t) => {
+  t.mock.method(globalThis, "fetch", async (path, options) => {
+    assert.equal(path, "/api/rules/12");
+    assert.equal(options.method, "PUT");
+    assert.deepEqual(JSON.parse(options.body), { enabled: false, warningThreshold: 80, criticalThreshold: 90, triggerCount: 5, recoveryCount: 2 });
+    return new Response(JSON.stringify({ id: 12 }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  await updateRule(12, { enabled: false, warningThreshold: "80", criticalThreshold: "90", triggerCount: "5", recoveryCount: "2", ignored: "not sent" });
+});
+
+test("notification and user updates use their documented PUT contracts", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (path, options) => {
+    calls.push([path, JSON.parse(options.body)]);
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  await updateNotificationPolicy(3, { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", enabled: true, repeatMinutes: "20" });
+  await updateUser("ops name", { role: "Operator", enabled: false, password: "" });
+  assert.deepEqual(calls, [
+    ["/api/notification-policies/3", { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", enabled: true, repeatMinutes: 20 }],
+    ["/api/users/ops%20name", { role: "Operator", enabled: false, password: null }],
+  ]);
 });

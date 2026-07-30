@@ -78,3 +78,49 @@ export function normalizeDashboard(payload) {
 export async function getDashboard() {
   return normalizeDashboard(await requestJson("/api/dashboard"));
 }
+
+export const getRules = () => requestJson("/api/rules");
+export const updateRule = (id, rule) => requestJson(`/api/rules/${id}`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    enabled: rule.enabled,
+    warningThreshold: Number(rule.warningThreshold),
+    criticalThreshold: Number(rule.criticalThreshold),
+    triggerCount: Number(rule.triggerCount),
+    recoveryCount: Number(rule.recoveryCount),
+  }),
+});
+
+export const getNotificationPolicies = () => requestJson("/api/notification-policies");
+const notificationPolicyBody = (policy) => ({
+  name: policy.name,
+  serverGroup: policy.serverGroup,
+  severity: policy.severity,
+  contactGroup: policy.contactGroup,
+  enabled: policy.enabled,
+  repeatMinutes: Number(policy.repeatMinutes),
+});
+export const createNotificationPolicy = (policy) => requestJson("/api/notification-policies", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(notificationPolicyBody(policy)),
+});
+export const updateNotificationPolicy = (id, policy) => requestJson(`/api/notification-policies/${id}`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(notificationPolicyBody(policy)),
+});
+export const deleteNotificationPolicy = (id) => requestJson(`/api/notification-policies/${id}`, { method: "DELETE" });
+
+export const getUsers = () => requestJson("/api/users");
+export const createUser = (user) => requestJson("/api/users", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ username: user.username, password: user.password, role: user.role }),
+});
+export const updateUser = (username, user) => requestJson(`/api/users/${encodeURIComponent(username)}`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ role: user.role, enabled: user.enabled, password: user.password || null }),
+});

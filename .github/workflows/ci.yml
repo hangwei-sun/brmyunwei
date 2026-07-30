@@ -40,3 +40,12 @@ jobs:
 
       - name: Check vulnerable backend dependencies
         run: dotnet list backend/MonitoringPlatform.Api.csproj package --vulnerable --include-transitive
+
+      - name: Build Windows Agent
+        run: dotnet build agent/MonitoringPlatform.Agent.csproj -c Release
+
+      - name: Test Windows Agent
+        run: dotnet run --project agent/tests/MonitoringPlatform.Agent.SelfTests.csproj -c Release
+
+      - name: Check vulnerable Agent dependencies
+        run: dotnet list agent/MonitoringPlatform.Agent.csproj package --vulnerable --include-transitive
