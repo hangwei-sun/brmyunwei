@@ -87,7 +87,9 @@ $configuration = [ordered]@{
     ConnectionStrings = @{ Monitoring = "Data Source=$dataRoot\monitoring.db;Cache=Shared" }
     Authentication = @{ DataProtectionKeysPath = $keysRoot; BootstrapAdmin = @{ Enabled = $false; Username = ''; Password = '' } }
     AgentEnrollment = @{ Enabled = $true; AllowLegacyAgentKeys = $false; IssuerCertificateSubject = $rootCertificateCommonName; IssuerCertificateSha256 = $rootCertificateSha256; IssuerStoreName = 'My'; IssuerStoreLocation = 'CurrentUser'; TokenMinutes = 10; CertificateDays = 90; RotationGraceMinutes = 15 }
-    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $certificateCommonName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
+    # The prerelease root is intentionally imported through a visible, operator-approved flow.
+    # The exact randomized subject still pins certificate selection before that trust is granted.
+    Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $certificateCommonName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $true } } } }
     TencentCloudSms = @{ Enabled = $false; RolloutMode = 'disabled'; TestPhoneNumbers = @(); Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
     NotificationContacts = @{ Groups = @{} }
     NotificationWorker = @{ Enabled = $true; ScanSeconds = 5; MaxAttempts = 10 }

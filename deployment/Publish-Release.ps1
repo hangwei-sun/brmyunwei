@@ -59,12 +59,27 @@ function Assert-NoNuGetVulnerabilities {
     if ($json -match '"vulnerabilities"\s*:') { throw "NuGet vulnerability scan found a vulnerable dependency: $Project" }
 }
 
+function Assert-TlsReleasePolicy {
+    $isolatedInitializer = Get-Content -LiteralPath '.\deployment\Initialize-IsolatedPrerelease.ps1' -Raw
+    if ($isolatedInitializer -notmatch 'Location = ''CurrentUser''; AllowInvalid = \$true') {
+        throw 'The isolated prerelease must allow its exact randomized certificate before manual root trust is approved.'
+    }
+
+    $production = Get-Content -LiteralPath '.\deployment\appsettings.Production.template.json' -Raw | ConvertFrom-Json
+    $witness = Get-Content -LiteralPath '.\witness\appsettings.json' -Raw | ConvertFrom-Json
+    if ($production.Kestrel.Endpoints.Https.Certificate.AllowInvalid -ne $false -or
+        $witness.Kestrel.Endpoints.Https.Certificate.AllowInvalid -ne $false) {
+        throw 'Production center and witness TLS certificates must keep AllowInvalid=false.'
+    }
+}
+
 Push-Location $repoRoot
 try {
     if (git status --porcelain) { throw 'Release builds require a clean Git working tree.' }
 
     $deploymentScripts = Get-ChildItem -LiteralPath '.\deployment' -Filter '*.ps1' -File | Select-Object -ExpandProperty FullName
     Assert-PowerShellSyntax -Paths $deploymentScripts
+    Assert-TlsReleasePolicy
     & '.\agent\Test-AgentScripts.ps1'
     & '.\witness\Test-WitnessScripts.ps1'
 
