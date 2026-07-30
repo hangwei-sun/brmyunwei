@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
 using System.Runtime.Serialization.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,7 +17,16 @@ namespace MonitoringPlatform.Agent
         public AgentUploader(AgentSettings settings)
         {
             _settings = settings;
-            _client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(settings.HttpTimeoutMilliseconds) };
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            var handler = new HttpClientHandler();
+            var clientCertificate = CertificateLoader.LoadClientCertificate(settings);
+            if (clientCertificate != null) handler.ClientCertificates.Add(clientCertificate);
+            if (settings.PinnedServerCertificateThumbprints.Length > 0)
+            {
+                handler.ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
+                    CertificateLoader.IsPinnedServerCertificateValid(certificate, errors, settings.PinnedServerCertificateThumbprints);
+            }
+            _client = new HttpClient(handler, true) { Timeout = TimeSpan.FromMilliseconds(settings.HttpTimeoutMilliseconds) };
         }
 
         public async Task<bool> UploadAsync(TelemetrySample sample, CancellationToken cancellationToken)
@@ -36,7 +46,7 @@ namespace MonitoringPlatform.Agent
                     using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
                     {
                         request.Headers.Add("X-Agent-Name", _settings.AgentName);
-                        request.Headers.Add("X-Agent-Key", _settings.AgentKey);
+                        if (!string.IsNullOrWhiteSpace(_settings.AgentKey)) request.Headers.Add("X-Agent-Key", _settings.AgentKey);
                         request.Content = new StreamContent(payload);
                         request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
                         using (var response = await _client.SendAsync(request, cancellationToken).ConfigureAwait(false))

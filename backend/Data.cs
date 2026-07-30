@@ -2,7 +2,10 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
-sealed class MonitoringDbContext(DbContextOptions<MonitoringDbContext> options) : DbContext(options)
+sealed class MonitoringDbContext(
+    DbContextOptions<MonitoringDbContext> options,
+    HaLeaseState? haLease = null,
+    IHostApplicationLifetime? applicationLifetime = null) : DbContext(options)
 {
     public DbSet<Host> Hosts => Set<Host>();
     public DbSet<Incident> Incidents => Set<Incident>();
@@ -12,16 +15,26 @@ sealed class MonitoringDbContext(DbContextOptions<MonitoringDbContext> options) 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<LocalUser> LocalUsers => Set<LocalUser>();
     public DbSet<AgentCredential> AgentCredentials => Set<AgentCredential>();
+    public DbSet<AgentEnrollmentToken> AgentEnrollmentTokens => Set<AgentEnrollmentToken>();
     public DbSet<ProbeDefinition> ProbeDefinitions => Set<ProbeDefinition>();
     public DbSet<HostServiceStatus> HostServiceStatuses => Set<HostServiceStatus>();
     public DbSet<MetricRuleState> MetricRuleStates => Set<MetricRuleState>();
     public DbSet<NotificationDeliveryState> NotificationDeliveryStates => Set<NotificationDeliveryState>();
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        if (applicationLifetime?.ApplicationStarted.IsCancellationRequested == true && haLease is not null && !haLease.CanCommit(DateTimeOffset.UtcNow))
+            throw new DbUpdateException("The node no longer holds a witness lease with enough safety margin to commit writes.");
+        return base.SaveChangesAsync(cancellationToken);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<LocalUser>().HasIndex(user => user.NormalizedUserName).IsUnique();
         modelBuilder.Entity<AgentCredential>().HasKey(credential => credential.HostId);
         modelBuilder.Entity<AgentCredential>().HasOne<Host>().WithOne().HasForeignKey<AgentCredential>(credential => credential.HostId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AgentEnrollmentToken>().HasKey(token => token.HostId);
+        modelBuilder.Entity<AgentEnrollmentToken>().HasOne<Host>().WithOne().HasForeignKey<AgentEnrollmentToken>(token => token.HostId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<ProbeDefinition>().HasIndex(probe => new { probe.HostId, probe.Fingerprint }).IsUnique();
         modelBuilder.Entity<ProbeDefinition>().HasOne(probe => probe.Host).WithMany().HasForeignKey(probe => probe.HostId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<Incident>().HasIndex(incident => new { incident.HostId, incident.Fingerprint });
@@ -43,7 +56,8 @@ sealed class AlertRule { public int Id { get; set; } public required string Name
 sealed class NotificationPolicy { public int Id { get; set; } public required string Name { get; set; } public required string ServerGroup { get; set; } public required string Severity { get; set; } public required string ContactGroup { get; set; } public bool Enabled { get; set; } public int RepeatMinutes { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class AuditLog { public long Id { get; set; } public required string Actor { get; set; } public required string Action { get; set; } public required string Detail { get; set; } public DateTimeOffset CreatedAt { get; set; } }
 sealed class LocalUser { public int Id { get; set; } public required string UserName { get; set; } public required string NormalizedUserName { get; set; } public required string PasswordHash { get; set; } public required string Role { get; set; } public required string SecurityStamp { get; set; } public bool Enabled { get; set; } public int FailedLoginCount { get; set; } public DateTimeOffset? LockoutEnd { get; set; } public DateTimeOffset? LastLoginAt { get; set; } public DateTimeOffset CreatedAt { get; set; } public static string Normalize(string value) => value.Trim().ToUpperInvariant(); }
-sealed class AgentCredential { public int HostId { get; set; } public required string KeyHash { get; set; } public DateTimeOffset RotatedAt { get; set; } }
+sealed class AgentCredential { public int HostId { get; set; } public required string KeyHash { get; set; } public bool RequireCertificate { get; set; } public string? CertificateSha256 { get; set; } public DateTimeOffset? CertificateNotAfter { get; set; } public string? PreviousCertificateSha256 { get; set; } public DateTimeOffset? PreviousCertificateValidUntil { get; set; } public DateTimeOffset RotatedAt { get; set; } }
+sealed class AgentEnrollmentToken { public int HostId { get; set; } public required string TokenHash { get; set; } public DateTimeOffset ExpiresAt { get; set; } public DateTimeOffset? UsedAt { get; set; } public DateTimeOffset CreatedAt { get; set; } }
 sealed class ProbeDefinition
 {
     public int Id { get; set; }
@@ -119,6 +133,17 @@ static class SecuritySchema
               CONSTRAINT "FK_AgentCredentials_Hosts_HostId" FOREIGN KEY ("HostId") REFERENCES "Hosts" ("Id") ON DELETE CASCADE
             );
             """);
+        await EnsureAgentCredentialColumnsAsync(db);
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "AgentEnrollmentTokens" (
+              "HostId" INTEGER NOT NULL CONSTRAINT "PK_AgentEnrollmentTokens" PRIMARY KEY,
+              "TokenHash" TEXT NOT NULL,
+              "ExpiresAt" TEXT NOT NULL,
+              "UsedAt" TEXT NULL,
+              "CreatedAt" TEXT NOT NULL,
+              CONSTRAINT "FK_AgentEnrollmentTokens_Hosts_HostId" FOREIGN KEY ("HostId") REFERENCES "Hosts" ("Id") ON DELETE CASCADE
+            );
+            """);
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS "ProbeDefinitions" (
               "Id" INTEGER NOT NULL CONSTRAINT "PK_ProbeDefinitions" PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +215,16 @@ static class SecuritySchema
         if (!columns.Contains("ResolvedAt"))
             await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Incidents\" ADD COLUMN \"ResolvedAt\" TEXT NULL;");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_Incidents_HostId_Fingerprint\" ON \"Incidents\" (\"HostId\", \"Fingerprint\");");
+    }
+
+    private static async Task EnsureAgentCredentialColumnsAsync(MonitoringDbContext db)
+    {
+        var columns = await ColumnsAsync(db, "AgentCredentials");
+        if (!columns.Contains("CertificateSha256")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AgentCredentials\" ADD COLUMN \"CertificateSha256\" TEXT NULL;");
+        if (!columns.Contains("CertificateNotAfter")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AgentCredentials\" ADD COLUMN \"CertificateNotAfter\" TEXT NULL;");
+        if (!columns.Contains("RequireCertificate")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AgentCredentials\" ADD COLUMN \"RequireCertificate\" INTEGER NOT NULL DEFAULT 0;");
+        if (!columns.Contains("PreviousCertificateSha256")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AgentCredentials\" ADD COLUMN \"PreviousCertificateSha256\" TEXT NULL;");
+        if (!columns.Contains("PreviousCertificateValidUntil")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AgentCredentials\" ADD COLUMN \"PreviousCertificateValidUntil\" TEXT NULL;");
     }
 
     private static async Task EnsureHostAndRuleColumnsAsync(MonitoringDbContext db)

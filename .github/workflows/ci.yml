@@ -32,14 +32,17 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Audit frontend dependencies
+        run: npm audit
+
       - name: Restore backend
         run: dotnet restore backend/MonitoringPlatform.Api.csproj
 
       - name: Test backend
         run: dotnet test backend/tests/MonitoringPlatform.Api.Tests.csproj -c Release
 
-      - name: Check vulnerable backend dependencies
-        run: dotnet list backend/MonitoringPlatform.Api.csproj package --vulnerable --include-transitive
+      - name: Verify backend formatting
+        run: dotnet format backend/MonitoringPlatform.Api.csproj --verify-no-changes --no-restore
 
       - name: Build Windows Agent
         run: dotnet build agent/MonitoringPlatform.Agent.csproj -c Release
@@ -47,5 +50,34 @@ jobs:
       - name: Test Windows Agent
         run: dotnet run --project agent/tests/MonitoringPlatform.Agent.SelfTests.csproj -c Release
 
-      - name: Check vulnerable Agent dependencies
-        run: dotnet list agent/MonitoringPlatform.Agent.csproj package --vulnerable --include-transitive
+      - name: Verify Agent formatting
+        run: dotnet format agent/MonitoringPlatform.Agent.csproj --verify-no-changes --no-restore
+
+      - name: Test Witness
+        run: dotnet test witness/tests/MonitoringPlatform.Witness.Tests.csproj -c Release
+
+      - name: Verify Witness formatting
+        run: dotnet format witness/MonitoringPlatform.Witness.csproj --verify-no-changes --no-restore
+
+      - name: Verify PowerShell syntax
+        shell: pwsh
+        run: |
+          ./agent/Test-AgentScripts.ps1
+          ./witness/Test-WitnessScripts.ps1
+          $errors = @()
+          Get-ChildItem ./deployment -Filter '*.ps1' | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            $errors += $parseErrors
+          }
+          if ($errors.Count -gt 0) { throw 'Deployment PowerShell syntax verification failed.' }
+
+      - name: Check vulnerable NuGet dependencies
+        shell: pwsh
+        run: |
+          foreach ($project in @('backend/MonitoringPlatform.Api.csproj', 'agent/MonitoringPlatform.Agent.csproj', 'witness/MonitoringPlatform.Witness.csproj')) {
+            $json = (dotnet list $project package --vulnerable --include-transitive --format json) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "Vulnerability scan failed: $project" }
+            if ($json -match '"vulnerabilities"\s*:') { throw "Vulnerable dependency found: $project" }
+          }

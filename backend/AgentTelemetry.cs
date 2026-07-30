@@ -158,7 +158,7 @@ sealed class AgentHealthOptions
     public int OfflineSeconds { get; set; } = 180;
 }
 
-sealed class AgentHealthWorker(IServiceScopeFactory scopeFactory, IOptions<AgentHealthOptions> configured, ILogger<AgentHealthWorker> logger) : BackgroundService
+sealed class AgentHealthWorker(IServiceScopeFactory scopeFactory, IOptions<AgentHealthOptions> configured, HaLeaseState haLease, ILogger<AgentHealthWorker> logger) : BackgroundService
 {
     private readonly AgentHealthOptions _options = configured.Value;
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -168,6 +168,11 @@ sealed class AgentHealthWorker(IServiceScopeFactory scopeFactory, IOptions<Agent
         {
             try
             {
+                if (!haLease.CanMutate(DateTimeOffset.UtcNow))
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(_options.ScanSeconds, 5, 300)), stoppingToken);
+                    continue;
+                }
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
                 var now = DateTimeOffset.UtcNow;

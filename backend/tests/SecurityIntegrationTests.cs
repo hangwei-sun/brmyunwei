@@ -13,6 +13,54 @@ using Xunit;
 public sealed class SecurityIntegrationTests
 {
     [Fact]
+    public async Task Admin_CanRevokeAgentCertificate_WithoutDowngradingToSharedKey()
+    {
+        await using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        var adminToken = await LoginAsync(client, ApiFactory.AdminUser, ApiFactory.AdminPassword);
+        Authorize(client, adminToken);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/hosts", new { name = "CERT-REVOKE", ip = "10.9.0.8", room = "测试机房", service = "测试" }, CancellationToken)).StatusCode);
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
+            var hostId = await db.Hosts.Where(item => item.Name == "CERT-REVOKE").Select(item => item.Id).SingleAsync(CancellationToken);
+            db.AgentCredentials.Add(new AgentCredential
+            {
+                HostId = hostId,
+                KeyHash = AgentKeyAuthenticationHandler.Hash(AgentKeyAuthenticationHandler.CreateKey()),
+                RequireCertificate = true,
+                CertificateSha256 = new string('A', 64),
+                CertificateNotAfter = DateTimeOffset.UtcNow.AddDays(30),
+                RotatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync(CancellationToken);
+        }
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync("/api/hosts/CERT-REVOKE/agent-certificate", CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsync("/api/hosts/CERT-REVOKE/agent-key", null, CancellationToken)).StatusCode);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var credential = await scope.ServiceProvider.GetRequiredService<MonitoringDbContext>().AgentCredentials.SingleAsync(item => item.RequireCertificate, CancellationToken);
+            Assert.Null(credential.CertificateSha256);
+            Assert.True(credential.RequireCertificate);
+        }
+    }
+
+    [Fact]
+    public async Task PassiveHaNode_AllowsHealthButRejectsLoginWrites()
+    {
+        await using var factory = new ApiFactory(passiveHa: true);
+        using var client = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health", CancellationToken)).StatusCode);
+        var anonymousMutation = await client.PostAsJsonAsync("/api/hosts", new { name = "NO-AUTH", ip = "10.9.0.9", room = "测试机房", service = "测试" }, CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousMutation.StatusCode);
+        var login = await client.PostAsJsonAsync("/api/auth/login", new { username = ApiFactory.AdminUser, password = ApiFactory.AdminPassword }, CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, login.StatusCode);
+    }
+
+    [Fact]
     public async Task Anonymous_CanReadHealth_ButCannotReadManagementApis()
     {
         await using var factory = new ApiFactory();
@@ -34,6 +82,9 @@ public sealed class SecurityIntegrationTests
         Authorize(client, viewerToken);
 
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/hosts", CancellationToken)).StatusCode);
+        var ha = await client.GetFromJsonAsync<JsonElement>("/api/ha", CancellationToken);
+        Assert.Equal("single-node", ha.GetProperty("mode").GetString());
+        Assert.False(ha.GetProperty("holdsLease").GetBoolean());
         var response = await client.PostAsJsonAsync("/api/hosts", new { name = "TEST-01", ip = "10.9.0.1", room = "测试机房", service = "测试" }, CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 
@@ -221,6 +272,7 @@ public sealed class SecurityIntegrationTests
         }, CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
 
+        Guid ambiguousIncidentId;
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
@@ -229,7 +281,16 @@ public sealed class SecurityIntegrationTests
             Assert.True(firstCount > 0);
             await NotificationPlanner.EnsureStatesAsync(db, DateTimeOffset.UtcNow.AddSeconds(1), CancellationToken);
             Assert.Equal(firstCount, await db.NotificationDeliveryStates.CountAsync(CancellationToken));
+            var ambiguous = await db.NotificationDeliveryStates.FirstAsync(item => item.NotificationPolicyId == policyId, CancellationToken);
+            ambiguousIncidentId = ambiguous.IncidentId;
+            ambiguous.Status = "发送中";
+            ambiguous.NextAttemptAt = DateTimeOffset.MaxValue;
+            await db.SaveChangesAsync(CancellationToken);
         }
+
+        var resolve = await client.PostAsJsonAsync($"/api/notification-deliveries/{ambiguousIncidentId}/{policyId}/resolve", new { action = "retry" }, CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resolve.StatusCode);
+        Assert.Equal("待发送", (await resolve.Content.ReadFromJsonAsync<JsonElement>(CancellationToken)).GetProperty("status").GetString());
 
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/notification-policies/{policyId}", CancellationToken)).StatusCode);
     }
@@ -288,6 +349,9 @@ sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
     public const string AdminPassword = "Integration-Admin-2026!";
     private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"monitoring-tests-{Guid.NewGuid():N}.db");
     private readonly string _keysPath = Path.Combine(Path.GetTempPath(), $"monitoring-keys-{Guid.NewGuid():N}");
+    private readonly bool _passiveHa;
+
+    public ApiFactory(bool passiveHa = false) => _passiveHa = passiveHa;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -301,7 +365,9 @@ sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
             ["DevelopmentAuth:Password"] = AdminPassword,
             ["ProbeWorker:Enabled"] = "false",
             ["AgentHealth:Enabled"] = "false",
-            ["NotificationWorker:Enabled"] = "false"
+            ["NotificationWorker:Enabled"] = "false",
+            ["HighAvailability:Enabled"] = _passiveHa.ToString(),
+            ["HighAvailability:ConfiguredRole"] = "passive"
         }));
         builder.ConfigureServices(services =>
         {

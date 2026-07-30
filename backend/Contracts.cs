@@ -8,6 +8,7 @@ sealed record UserDto(string Username, string Role, bool Enabled, DateTimeOffset
 sealed record IncidentActionRequest(string? Note);
 sealed record AlertRuleUpdate(bool Enabled, double WarningThreshold, double CriticalThreshold, int TriggerCount = 1, int RecoveryCount = 2);
 sealed record NotificationPolicyRequest(string Name, string ServerGroup, string Severity, string ContactGroup, bool Enabled, int RepeatMinutes);
+sealed record NotificationDeliveryResolutionRequest(string Action);
 sealed record SmsTestRequest(string[] PhoneNumbers, string[] TemplateParameters);
 sealed record HostRequest(string Name, string Ip, string Room, string Service, string? Group = null);
 sealed record ProbeRequest(string Name, string Type, string Target, int? Port, int? ExpectedStatus, bool Enabled, int IntervalSeconds, int TimeoutMilliseconds, int FailureThreshold, int RecoveryThreshold);
@@ -18,6 +19,8 @@ sealed record ProbeDto(int Id, string Host, string Name, string Type, string Tar
 sealed record AgentServiceStatusRequest(string Name, string Status);
 sealed record AgentIngestRequest(string HostName, long Sequence, DateTimeOffset CollectedAt, double Cpu, double Memory, double Disk, double Latency, double? NetworkBytesPerSecond = null, DateTimeOffset? BootTime = null, AgentServiceStatusRequest[]? Services = null, string? AgentVersion = null);
 sealed record AgentKeyResponse(string HostName, string AgentKey, DateTimeOffset RotatedAt);
+sealed record AgentEnrollmentTokenResponse(string HostName, string EnrollmentToken, DateTimeOffset ExpiresAt);
+sealed record AgentEnrollmentRequest(string? HostName, string? CsrPem);
 sealed record HostDto(string Id, string Ip, string Room, string Service, string Group, string Status, double? Cpu, double? Memory, double? Disk, double? Latency, double? NetworkBytesPerSecond, DateTimeOffset? BootTime, string? AgentVersion, string Heartbeat)
 {
     public static HostDto From(Host host) => new(host.Name, host.Ip, host.Room, host.Service, host.Group, host.Status, host.Cpu, host.Memory, host.Disk, host.Latency, host.NetworkBytesPerSecond, host.BootTime, host.AgentVersion, $"{Math.Max(0, (int)(DateTimeOffset.UtcNow - host.LastHeartbeatAt).TotalSeconds)} 秒前");
@@ -28,10 +31,7 @@ sealed record IncidentDto(Guid Id, string Host, string Ip, string Title, string 
 {
     public static IncidentDto From(Incident incident) => new(incident.Id, incident.Host?.Name ?? "未知", incident.Host?.Ip ?? "-", incident.Title, incident.Severity, incident.StartedAt.ToLocalTime().ToString("HH:mm:ss"), $"{Math.Max(1, (int)(DateTimeOffset.UtcNow - incident.StartedAt).TotalMinutes)} 分钟", incident.Signal, incident.Value, incident.State);
 }
-sealed record HaCapability(string Mode, bool FailoverSupported, string Message)
-{
-    public static readonly HaCapability Current = new("single-node", false, "当前版本未实现真实主备协调与故障转移。");
-}
+sealed record HaStatusDto(bool Enabled, string Mode, string NodeId, string ConfiguredRole, bool HoldsLease, long? Epoch, DateTimeOffset? LeaseExpiresAt, string Witness, string Message);
 
 static class Validation
 {

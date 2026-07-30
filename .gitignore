@@ -3,8 +3,7 @@ node_modules/
 dist/
 artifacts/
 .playwright-cli/
-backend/.build-probe/
-backend/.build-probe*/
+**/.build-*/
 **/bin/
 **/obj/
 agent/publish/

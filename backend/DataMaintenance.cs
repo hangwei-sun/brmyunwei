@@ -19,6 +19,7 @@ sealed class DataMaintenanceWorker(
     IServiceScopeFactory scopeFactory,
     IOptions<DataMaintenanceOptions> configuredOptions,
     IWebHostEnvironment environment,
+    HaLeaseState haLease,
     ILogger<DataMaintenanceWorker> logger) : BackgroundService
 {
     private const int DeleteBatchSize = 5_000;
@@ -39,6 +40,7 @@ sealed class DataMaintenanceWorker(
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             try
             {
+                if (!haLease.CanMutate(DateTimeOffset.UtcNow)) continue;
                 await CleanupAsync(stoppingToken);
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
@@ -76,11 +78,12 @@ sealed class DataMaintenanceWorker(
         logger.LogInformation("Data retention completed. Metrics={Metrics}, incidents={Incidents}, audits={Audits}.", metrics, incidents, audits);
     }
 
-    private static async Task<int> DeleteInBatchesAsync(Func<Task<int>> deleteBatch, CancellationToken cancellationToken)
+    private async Task<int> DeleteInBatchesAsync(Func<Task<int>> deleteBatch, CancellationToken cancellationToken)
     {
         var total = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (!haLease.CanCommit(DateTimeOffset.UtcNow)) throw new InvalidOperationException("Witness lease was lost during data retention.");
             var deleted = await deleteBatch();
             total += deleted;
             if (deleted < DeleteBatchSize) break;
@@ -91,10 +94,7 @@ sealed class DataMaintenanceWorker(
 
     internal static async Task<BackupResult> BackupNowAsync(MonitoringDbContext db, DataMaintenanceOptions options, IWebHostEnvironment environment, ILogger logger, CancellationToken cancellationToken)
     {
-        var backupDirectory = options.BackupDirectory;
-        if (string.IsNullOrWhiteSpace(backupDirectory))
-            backupDirectory = Path.Combine(environment.ContentRootPath, "Data", "Backups");
-        backupDirectory = Path.GetFullPath(backupDirectory);
+        var backupDirectory = ResolveBackupDirectory(options, environment);
         Directory.CreateDirectory(backupDirectory);
 
         var targetPath = Path.Combine(backupDirectory, $"monitoring-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.db");
@@ -122,6 +122,13 @@ sealed class DataMaintenanceWorker(
         PruneBackups(backupDirectory, DateTimeOffset.Now.AddDays(-Math.Clamp(options.BackupKeepDays, 2, 365)), logger);
         logger.LogInformation("Verified SQLite online backup created at {BackupPath}.", targetPath);
         return new BackupResult(Path.GetFileName(targetPath), hash);
+    }
+
+    internal static string ResolveBackupDirectory(DataMaintenanceOptions options, IWebHostEnvironment environment)
+    {
+        var backupDirectory = options.BackupDirectory;
+        if (string.IsNullOrWhiteSpace(backupDirectory)) backupDirectory = Path.Combine(environment.ContentRootPath, "Data", "Backups");
+        return Path.GetFullPath(backupDirectory);
     }
 
     private static void PruneBackups(string backupDirectory, DateTimeOffset cutoff, ILogger logger)

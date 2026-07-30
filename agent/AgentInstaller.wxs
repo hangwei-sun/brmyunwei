@@ -1,0 +1,36 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Monitoring Platform Agent" Manufacturer="Monitoring Platform"
+           Version="$(var.ProductVersion)" UpgradeCode="A9E9B677-D381-4D99-9708-C30CB3EBB6A8" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Monitoring Platform Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="CompanyFolder" Name="MonitoringPlatform">
+        <Directory Id="INSTALLFOLDER" Name="Agent">
+          <Component Id="AgentService" Guid="*">
+            <File Id="AgentExecutable" Source="$(var.SourceDir)\MonitoringPlatform.Agent.exe" KeyPath="yes" />
+            <File Id="AgentConfiguration" Source="$(var.SourceDir)\MonitoringPlatform.Agent.exe.config" />
+            <ServiceInstall Id="InstallAgentService" Name="MonitoringPlatformAgent"
+                            DisplayName="Monitoring Platform Agent" Description="Read-only outbound monitoring agent"
+                            Type="ownProcess" Start="demand" ErrorControl="normal" Account="NT AUTHORITY\LocalService" />
+            <ServiceControl Id="ControlAgentService" Name="MonitoringPlatformAgent" Stop="both" Remove="uninstall" Wait="yes" />
+          </Component>
+          <Component Id="AgentDeliveryScripts" Guid="*">
+            <File Source="$(var.SourceDir)\Enroll-Agent.ps1" />
+            <File Source="$(var.SourceDir)\Rotate-AgentCertificate.ps1" />
+            <File Source="$(var.SourceDir)\Upgrade-Agent.ps1" />
+            <File Source="$(var.SourceDir)\Uninstall-Agent.ps1" />
+            <File Source="$(var.SourceDir)\Verify-AgentPackage.ps1" />
+            <File Source="$(var.SourceDir)\Measure-AgentResource.ps1" />
+            <File Source="$(var.SourceDir)\README.md" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="ProductFeature" Title="Monitoring Platform Agent" Level="1">
+      <ComponentRef Id="AgentService" />
+      <ComponentRef Id="AgentDeliveryScripts" />
+    </Feature>
+  </Package>
+</Wix>

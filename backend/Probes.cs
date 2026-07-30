@@ -185,7 +185,7 @@ sealed class ProbeIncidentService
     }
 }
 
-sealed class ProbeWorker(IServiceScopeFactory scopeFactory, IProbeExecutor executor, IOptions<ProbeWorkerOptions> options, ILogger<ProbeWorker> logger) : BackgroundService
+sealed class ProbeWorker(IServiceScopeFactory scopeFactory, IProbeExecutor executor, IOptions<ProbeWorkerOptions> options, HaLeaseState haLease, ILogger<ProbeWorker> logger) : BackgroundService
 {
     private readonly ProbeWorkerOptions _options = options.Value;
 
@@ -202,6 +202,11 @@ sealed class ProbeWorker(IServiceScopeFactory scopeFactory, IProbeExecutor execu
         {
             try
             {
+                if (!haLease.CanMutate(DateTimeOffset.UtcNow))
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(_options.LoopDelaySeconds, 1, 30)), stoppingToken);
+                    continue;
+                }
                 var due = await GetDueAsync(stoppingToken);
                 await Task.WhenAll(due.Select(async id =>
                 {

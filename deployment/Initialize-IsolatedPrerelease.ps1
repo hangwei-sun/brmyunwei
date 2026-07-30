@@ -63,8 +63,9 @@ Copy-Item -Path (Join-Path $sourceAgent '*') -Destination $agentRoot -Recurse -F
 $machineName = [Environment]::MachineName
 $dnsNames = @('localhost', $machineName) | Select-Object -Unique
 $certificateCommonName = "MonitoringPlatform-Prerelease-$machineName-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+$rootCertificateCommonName = "Monitoring Platform Prerelease Root CA - $machineName"
 $rootCertificate = New-SelfSignedCertificate `
-    -Subject "CN=Monitoring Platform Prerelease Root CA - $machineName" `
+    -Subject "CN=$rootCertificateCommonName" `
     -CertStoreLocation 'Cert:\CurrentUser\My' `
     -FriendlyName 'Monitoring Platform Isolated Prerelease Root CA' -NotAfter (Get-Date).AddDays(365) `
     -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable `
@@ -77,6 +78,7 @@ $certificate = New-SelfSignedCertificate -Subject "CN=$certificateCommonName" -D
     -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable
 $rootPublicCertificate = Join-Path $install 'prerelease-root-ca.cer'
 $publicCertificate = Join-Path $install 'prerelease-server.cer'
+$rootCertificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rootCertificate.RawData))).Replace('-', '')
 Export-Certificate -Cert $rootCertificate -FilePath $rootPublicCertificate -Force | Out-Null
 Export-Certificate -Cert $certificate -FilePath $publicCertificate -Force | Out-Null
 Import-Certificate -FilePath $rootPublicCertificate -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
@@ -85,8 +87,9 @@ $configuration = [ordered]@{
     AllowedHosts = "localhost;$machineName"
     ConnectionStrings = @{ Monitoring = "Data Source=$dataRoot\monitoring.db;Cache=Shared" }
     Authentication = @{ DataProtectionKeysPath = $keysRoot; BootstrapAdmin = @{ Enabled = $false; Username = ''; Password = '' } }
+    AgentEnrollment = @{ Enabled = $true; AllowLegacyAgentKeys = $false; IssuerCertificateSubject = $rootCertificateCommonName; IssuerCertificateSha256 = $rootCertificateSha256; IssuerStoreName = 'My'; IssuerStoreLocation = 'CurrentUser'; TokenMinutes = 10; CertificateDays = 90; RotationGraceMinutes = 15 }
     Kestrel = @{ Endpoints = @{ Https = @{ Url = "https://0.0.0.0:$HttpsPort"; Certificate = @{ Subject = $certificateCommonName; Store = 'My'; Location = 'CurrentUser'; AllowInvalid = $false } } } }
-    TencentCloudSms = @{ Enabled = $false; Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
+    TencentCloudSms = @{ Enabled = $false; RolloutMode = 'disabled'; TestPhoneNumbers = @(); Region = 'ap-guangzhou'; SdkAppId = ''; SignName = ''; TemplateId = '' }
     NotificationContacts = @{ Groups = @{} }
     NotificationWorker = @{ Enabled = $true; ScanSeconds = 5; MaxAttempts = 10 }
     ProbeWorker = @{ Enabled = $true; MaxConcurrency = 8; LoopDelaySeconds = 1; MaxBackoffSeconds = 900; JitterMilliseconds = 500 }

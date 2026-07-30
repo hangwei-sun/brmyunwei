@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 namespace MonitoringPlatform.Agent.SelfTests
 {
@@ -16,6 +18,7 @@ namespace MonitoringPlatform.Agent.SelfTests
                 AssertEqual(0d, TelemetryMath.Rate(50, 100, TimeSpan.FromSeconds(1)), "counter reset");
                 VerifyBoundedQueue();
                 VerifyPayloadBudget();
+                VerifyCertificateNormalization();
                 Console.WriteLine("Agent self-tests passed.");
                 return 0;
             }
@@ -23,6 +26,25 @@ namespace MonitoringPlatform.Agent.SelfTests
             {
                 Console.Error.WriteLine(error.Message);
                 return 1;
+            }
+        }
+
+        private static void VerifyCertificateNormalization()
+        {
+            var normalized = CertificateLoader.NormalizeThumbprint(" aa:bb cc-dd ");
+            if (normalized != "AABBCCDD") throw new InvalidOperationException("certificate thumbprint normalization failed.");
+            if (CertificateLoader.NormalizeThumbprints("aa, AA;bb").Length != 2) throw new InvalidOperationException("certificate pin de-duplication failed.");
+            using (var rsa = RSA.Create(2048))
+            {
+                var request = new CertificateRequest("CN=agent-self-test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                using (var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1)))
+                {
+                    var thumbprint = CertificateLoader.Sha256Thumbprint(certificate);
+                    if (!CertificateLoader.IsPinnedServerCertificateValid(certificate, System.Net.Security.SslPolicyErrors.None, new[] { thumbprint }))
+                        throw new InvalidOperationException("matching certificate pin was rejected.");
+                    if (CertificateLoader.IsPinnedServerCertificateValid(certificate, System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch, new[] { thumbprint }))
+                        throw new InvalidOperationException("TLS validation error was accepted by pinning.");
+                }
             }
         }
 

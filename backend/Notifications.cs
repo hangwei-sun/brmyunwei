@@ -19,6 +19,7 @@ sealed class NotificationWorker(
     IServiceScopeFactory scopeFactory,
     IOptions<NotificationContactOptions> configuredContacts,
     IOptions<NotificationWorkerOptions> configuredWorker,
+    HaLeaseState haLease,
     ILogger<NotificationWorker> logger) : BackgroundService
 {
     private readonly NotificationContactOptions _contacts = configuredContacts.Value;
@@ -31,6 +32,12 @@ sealed class NotificationWorker(
         {
             try
             {
+                if (haLease.Options.Enabled && !haLease.HoldsValidLease(DateTimeOffset.UtcNow))
+                {
+                    logger.LogDebug("Notification worker is paused because this node does not hold a valid witness lease.");
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp(_options.ScanSeconds, 2, 300)), stoppingToken);
+                    continue;
+                }
                 await using (var scope = scopeFactory.CreateAsyncScope())
                 {
                     var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
@@ -51,6 +58,8 @@ sealed class NotificationWorker(
         var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
         var sender = scope.ServiceProvider.GetRequiredService<SmsSender>();
         var now = DateTimeOffset.UtcNow;
+        var leaseEpoch = haLease.Options.Enabled ? haLease.CurrentEpoch(now) : null;
+        if (haLease.Options.Enabled && leaseEpoch is null) return;
         var maxAttempts = Math.Clamp(_options.MaxAttempts, 1, 100);
         var candidates = await db.NotificationDeliveryStates
             .Where(item => item.Attempts < maxAttempts)
@@ -62,6 +71,8 @@ sealed class NotificationWorker(
             .ToList();
         foreach (var state in due)
         {
+            if (haLease.Options.Enabled && (leaseEpoch is null || !haLease.CanWrite(leaseEpoch.Value, DateTimeOffset.UtcNow) || !haLease.CanCommit(DateTimeOffset.UtcNow)))
+                throw new InvalidOperationException("Witness lease was lost before notification dispatch.");
             var incident = await db.Incidents.Include(item => item.Host).SingleOrDefaultAsync(item => item.Id == state.IncidentId, cancellationToken);
             var policy = await db.NotificationPolicies.FindAsync([state.NotificationPolicyId], cancellationToken);
             if (incident?.Host is null || policy is null || !policy.Enabled || incident.ResolvedAt is not null || incident.State != IncidentState.Open)
@@ -82,7 +93,14 @@ sealed class NotificationWorker(
             }
 
             var parameters = new[] { incident.Host.Name, incident.Title, incident.Value, incident.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") };
+            // Persist an ambiguous in-flight state before the external side effect. On lease loss or crash,
+            // operators reconcile this state instead of automatically risking a duplicate SMS.
+            state.Status = "发送中";
+            state.NextAttemptAt = DateTimeOffset.MaxValue;
+            await db.SaveChangesAsync(cancellationToken);
             var result = await sender.SendAsync(phoneNumbers, parameters);
+            if (haLease.Options.Enabled && (leaseEpoch is null || !haLease.CanWrite(leaseEpoch.Value, DateTimeOffset.UtcNow) || !haLease.CanCommit(DateTimeOffset.UtcNow)))
+                throw new InvalidOperationException("Witness lease was lost while notification delivery was in flight; delivery remains ambiguous and will not be retried automatically.");
             if (result.Sent)
             {
                 state.Status = "已发送";
