@@ -82,6 +82,7 @@ try {
     Copy-Item -LiteralPath '.\package.json', '.\package-lock.json' -Destination $frontendToolRoot -Force
     npm ci --prefix $frontendToolRoot
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+    $frontendToolRoot = Join-Path $frontendToolRoot 'node_modules'
   }
   & (Join-Path $frontendToolRoot '.bin\vite.cmd') build
   if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
