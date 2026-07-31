@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, clearAccessToken, getDashboard, getInAppNotifications, getSystemSettings, login, markAllInAppNotificationsRead, markInAppNotificationRead, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateSystemSettings, updateUser } from "./api.js";
+import { ApiError, clearAccessToken, getDashboard, getHaCluster, getInAppNotifications, getSystemSettings, login, markAllInAppNotificationsRead, markInAppNotificationRead, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateSystemSettings, updateUser } from "./api.js";
 
 test("requestJson returns a successful JSON payload", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ ok: true }), {
@@ -73,6 +73,14 @@ test("getDashboard rejects malformed successful responses", async (t) => {
     assert.equal(error.status, 502);
     return true;
   });
+});
+
+test("getHaCluster reads the protected two-node status endpoint", async (t) => {
+  t.mock.method(globalThis, "fetch", async (path) => {
+    assert.equal(path, "/api/ha/cluster");
+    return new Response(JSON.stringify({ current: { nodeId: "monitor-a" }, peer: { nodeId: "monitor-b" } }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  assert.equal((await getHaCluster()).peer.nodeId, "monitor-b");
 });
 
 test("updateRule serializes only the alert-rule update contract", async (t) => {

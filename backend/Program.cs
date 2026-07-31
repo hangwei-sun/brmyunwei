@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.BearerToken;
@@ -84,6 +85,7 @@ builder.Services.Configure<AgentEnrollmentOptions>(builder.Configuration.GetSect
 builder.Services.AddHttpClient("probe", client => client.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("ha-witness", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient("ha-peer", client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddSingleton<IProbeExecutor, NetworkProbeExecutor>();
 builder.Services.AddSingleton<IHaLeaseClient, HttpWitnessLeaseClient>();
 builder.Services.AddSingleton<HaLeaseState>();
@@ -348,6 +350,48 @@ read.MapGet("/in-app-notifications/unread-count", async (ClaimsPrincipal princip
 read.MapGet("/probes", async (MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).OrderBy(probe => probe.Host!.Name).ThenBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/hosts/{name}/probes", async (string name, MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).Where(probe => probe.Host!.Name == name.ToUpperInvariant()).OrderBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/ha", (HaLeaseState haLease) => Results.Ok(haLease.Status(DateTimeOffset.UtcNow)));
+read.MapGet("/ha/cluster", async (HaLeaseState haLease, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken) =>
+{
+    var now = DateTimeOffset.UtcNow;
+    var current = haLease.Status(now);
+    var options = haLease.Options;
+    object? peer = null;
+    if (options.Enabled)
+    {
+        var peerNodeId = string.IsNullOrWhiteSpace(options.PeerNodeId) ? "未配置" : options.PeerNodeId;
+        if (!Uri.TryCreate(options.PeerReadyUrl, UriKind.Absolute, out var peerReadyUrl) || peerReadyUrl.Scheme != Uri.UriSchemeHttps)
+        {
+            peer = new { nodeId = peerNodeId, managementUrl = options.PeerPublicUrl, ready = false, role = "unknown", epoch = (long?)null, checkedAt = now, error = "未配置备用节点 HTTPS ready 地址。" };
+        }
+        else
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.WitnessTimeoutSeconds, 1, 30)));
+                using var response = await httpClientFactory.CreateClient("ha-peer").GetAsync(peerReadyUrl, timeout.Token);
+                var payload = await response.Content.ReadFromJsonAsync<JsonElement>(timeout.Token);
+                var ready = response.IsSuccessStatusCode && payload.ValueKind == JsonValueKind.Object &&
+                    payload.TryGetProperty("status", out var status) && status.GetString() == "ready";
+                peer = new
+                {
+                    nodeId = peerNodeId,
+                    managementUrl = options.PeerPublicUrl,
+                    ready,
+                    role = payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("role", out var role) ? role.GetString() : "unknown",
+                    epoch = payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("epoch", out var epoch) && epoch.TryGetInt64(out var value) ? value : (long?)null,
+                    checkedAt = now,
+                    error = ready ? (string?)null : $"备用节点 ready 检查返回 HTTP {(int)response.StatusCode}。"
+                };
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+            {
+                peer = new { nodeId = peerNodeId, managementUrl = options.PeerPublicUrl, ready = false, role = "unknown", epoch = (long?)null, checkedAt = now, error = "无法连接备用节点 ready 地址。" };
+            }
+        }
+    }
+    return Results.Ok(new { current, currentManagementUrl = options.PublicUrl, peer });
+});
 read.MapGet("/sms-status", async (RuntimeSettingsStore settingsStore) =>
 {
     var settings = await settingsStore.GetDtoAsync();

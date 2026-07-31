@@ -87,6 +87,9 @@ public sealed class SecurityIntegrationTests
         var ha = await client.GetFromJsonAsync<JsonElement>("/api/ha", CancellationToken);
         Assert.Equal("single-node", ha.GetProperty("mode").GetString());
         Assert.False(ha.GetProperty("holdsLease").GetBoolean());
+        var cluster = await client.GetFromJsonAsync<JsonElement>("/api/ha/cluster", CancellationToken);
+        Assert.Equal("single-node", cluster.GetProperty("current").GetProperty("mode").GetString());
+        Assert.Equal(JsonValueKind.Null, cluster.GetProperty("peer").ValueKind);
         var response = await client.PostAsJsonAsync("/api/hosts", new { name = "TEST-01", ip = "10.9.0.1", room = "测试机房", service = "测试" }, CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 

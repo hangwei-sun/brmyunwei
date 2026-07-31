@@ -12,3 +12,4 @@ When implementing from a selected generated mock, treat that image as the source
 - Product: a dense, desktop-first Windows data-center operations console.
 - Required first-release flows: assets, real-time status, incident acknowledgement/silencing, rule inheritance, notification policies, Tencent Cloud SMS status, failover, and account roles.
 - Visual language: dark navy sidebar, compact white data surfaces, blue primary actions, and restrained semantic green/orange/red status color.
+- HA interaction: the top-bar dual-node entry opens a compact status modal; its node switch changes the browser's management endpoint only. Active/passive role changes remain fenced deployment operations, never a direct UI state mutation.

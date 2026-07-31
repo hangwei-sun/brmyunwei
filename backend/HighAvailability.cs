@@ -13,6 +13,10 @@ sealed class HaOptions
     public string ConfiguredRole { get; set; } = "passive";
     public string WitnessUrl { get; set; } = "";
     public string? WitnessBearerToken { get; set; }
+    public string? PublicUrl { get; set; }
+    public string? PeerNodeId { get; set; }
+    public string? PeerPublicUrl { get; set; }
+    public string? PeerReadyUrl { get; set; }
     public int LeaseTtlSeconds { get; set; } = 30;
     public int RenewSeconds { get; set; } = 10;
     public int WitnessTimeoutSeconds { get; set; } = 5;

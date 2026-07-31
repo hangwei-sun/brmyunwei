@@ -11,7 +11,7 @@
 
 ## 配置
 
-在 A 上配置 `ConfiguredRole=active`，在 B 上配置 `ConfiguredRole=passive`。两端均配置同一个 `ClusterId`、`WitnessUrl`、`ReplicationDirectory`，但必须配置不同的 `NodeId`、`WitnessBearerToken`、数据库和副本路径。生产推荐：TTL 60 秒、续租 15 秒、复制 30 秒、租约安全余量 5 秒。
+在 A 上配置 `ConfiguredRole=active`，在 B 上配置 `ConfiguredRole=passive`。两端均配置同一个 `ClusterId`、`WitnessUrl`、`ReplicationDirectory`，但必须配置不同的 `NodeId`、`WitnessBearerToken`、数据库和副本路径。两端还必须互相填写 `PublicUrl`、`PeerNodeId`、`PeerPublicUrl` 和 `PeerReadyUrl`，这样顶部“双节点”入口才能检查对端 ready 状态并跳转到对应控制端。生产推荐：TTL 60 秒、续租 15 秒、复制 30 秒、租约安全余量 5 秒。
 
 每个节点通过受保护的服务环境设置自己的 witness Token，不把 Token 放到计划任务、命令历史或 JSON 配置文件：
 

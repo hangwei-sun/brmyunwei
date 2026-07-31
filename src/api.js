@@ -79,6 +79,8 @@ export async function getDashboard() {
   return normalizeDashboard(await requestJson("/api/dashboard"));
 }
 
+export const getHaCluster = () => requestJson("/api/ha/cluster");
+
 export const getRules = () => requestJson("/api/rules");
 export const updateRule = (id, rule) => requestJson(`/api/rules/${id}`, {
   method: "PUT",
