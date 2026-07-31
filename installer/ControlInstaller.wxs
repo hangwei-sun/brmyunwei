@@ -17,12 +17,17 @@
           <Shortcut Id="ControlSetupShortcutLink" Name="Configure Monitoring Control" Target="[INSTALLFOLDER]MonitoringPlatform.Control.Setup.exe" WorkingDirectory="INSTALLFOLDER" />
           <RegistryValue Root="HKLM" Key="Software\MonitoringPlatform\Control" Name="SetupShortcut" Type="integer" Value="1" KeyPath="yes" />
         </Component>
+        <Component Id="LanCertificateShortcut" Guid="804E7EE4-369A-4F91-96B6-8B1BA881A828">
+          <Shortcut Id="LanCertificateShortcutLink" Name="Prepare LAN Certificates" Target="[INSTALLFOLDER]MonitoringPlatform.Control.Setup.exe" Arguments="--lan-certificates" WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue Root="HKLM" Key="Software\MonitoringPlatform\Control" Name="LanCertificateShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 
     <Feature Id="ProductFeature" Title="Monitoring Platform Control" Level="1">
       <ComponentGroupRef Id="ControlPayload" />
       <ComponentRef Id="ControlSetupShortcut" />
+      <ComponentRef Id="LanCertificateShortcut" />
     </Feature>
   </Package>
 </Wix>

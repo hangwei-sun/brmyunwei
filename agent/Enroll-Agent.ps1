@@ -9,6 +9,7 @@ param(
   [string]$TokenProtectedFile,
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')][string]$ApprovedSignerThumbprint,
   [uri]$SecondaryIngestEndpoint,
+  [string]$PinnedServerCertificateThumbprints = '',
   [string]$WatchedServices = '',
   [string]$DataRoot = "$env:ProgramData\MonitoringPlatform\Agent",
   [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform\Agent",
@@ -57,6 +58,8 @@ if ($TokenProtectedFile) {
 }
 if (-not $OneTimeEnrollmentToken) { throw 'OneTimeEnrollmentToken or TokenProtectedFile is required.' }
 if ($SecondaryIngestEndpoint -and $SecondaryIngestEndpoint.Scheme -ne 'https') { throw 'SecondaryIngestEndpoint must use HTTPS.' }
+$pinnedServerCertificateThumbprints = @($PinnedServerCertificateThumbprints.Split(',', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim().Replace(' ', '').Replace(':', '').ToUpperInvariant() } | Select-Object -Unique)
+if (@($pinnedServerCertificateThumbprints | Where-Object { $_ -notmatch '^[A-F0-9]{64}$' }).Count -gt 0) { throw 'PinnedServerCertificateThumbprints must contain SHA-256 certificate fingerprints.' }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $DataRoot.StartsWith($programDataRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'DataRoot must remain below ProgramData.' }
@@ -87,7 +90,16 @@ KeyUsage = 0xA0
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $csrPath)) { throw 'certreq failed to create the client certificate request.' }
 
 $tokenPointer = [IntPtr]::Zero
+$previousCertificateValidation = [Net.ServicePointManager]::ServerCertificateValidationCallback
 try {
+  if ($pinnedServerCertificateThumbprints.Count -gt 0) {
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = {
+      param($sender, $certificate, $chain, $sslPolicyErrors)
+      if (-not $certificate) { return $false }
+      $actual = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($certificate.GetRawCertData()))).Replace('-', '')
+      return $actual -in $pinnedServerCertificateThumbprints
+    }.GetNewClosure()
+  }
   $tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($OneTimeEnrollmentToken)
   $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer)
   if ([string]::IsNullOrWhiteSpace($token) -or $token.Length -lt 32) { throw 'OneTimeEnrollmentToken is missing or too short.' }
@@ -97,6 +109,7 @@ try {
 }
 finally {
   $token = $null
+  [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousCertificateValidation
   if ($tokenPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer) }
 }
 
@@ -133,7 +146,7 @@ try {
   & icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the Agent data directory.' }
   [xml]$configuration = Get-Content -LiteralPath $configPath -Raw
-  $updates = @{ AgentName = $AgentName; AgentKey = ''; PrimaryEndpoint = $IngestEndpoint.AbsoluteUri; SecondaryEndpoint = if ($SecondaryIngestEndpoint) { $SecondaryIngestEndpoint.AbsoluteUri } else { '' }; WatchedServices = $WatchedServices.Trim(); DataDirectory = $DataRoot; RequireClientCertificate = 'true'; ClientCertificateStoreLocation = 'LocalMachine'; ClientCertificateStoreName = 'My'; ClientCertificateThumbprint = $actualSha256 }
+  $updates = @{ AgentName = $AgentName; AgentKey = ''; PrimaryEndpoint = $IngestEndpoint.AbsoluteUri; SecondaryEndpoint = if ($SecondaryIngestEndpoint) { $SecondaryIngestEndpoint.AbsoluteUri } else { '' }; PinnedServerCertificateThumbprints = ($pinnedServerCertificateThumbprints -join ','); WatchedServices = $WatchedServices.Trim(); DataDirectory = $DataRoot; RequireClientCertificate = 'true'; ClientCertificateStoreLocation = 'LocalMachine'; ClientCertificateStoreName = 'My'; ClientCertificateThumbprint = $actualSha256 }
   foreach ($key in $updates.Keys) {
     $node = $configuration.configuration.appSettings.add | Where-Object key -eq $key
     if (-not $node) { throw "Agent configuration key is missing: $key" }

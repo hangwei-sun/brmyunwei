@@ -1,6 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.ServiceProcess;
 using System.Text;
@@ -86,6 +89,8 @@ namespace MonitoringPlatform.Agent.Setup
                 if (!Regex.IsMatch(signer, "^[A-Fa-f0-9]{40}$")) throw new InvalidOperationException("The package signer metadata is invalid.");
 
                 var tokenPath = WriteProtectedToken(_token.Text.Trim());
+                var pins = new[] { GetServerCertificateSha256(primary), secondary == null ? null : GetServerCertificateSha256(secondary) }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 _token.Clear();
                 _activate.Enabled = false;
                 _status.Text = "Opening the protected enrollment step...";
@@ -95,6 +100,7 @@ namespace MonitoringPlatform.Agent.Setup
                     " -IngestEndpoint " + Quote(primary + "/api/v1/agents/ingest") +
                     " -TokenProtectedFile " + Quote(tokenPath) +
                     " -ApprovedSignerThumbprint " + Quote(signer) +
+                    " -PinnedServerCertificateThumbprints " + Quote(string.Join(",", pins)) +
                     " -WatchedServices " + Quote(_services.Text.Trim());
                 if (secondary != null) arguments += " -SecondaryIngestEndpoint " + Quote(secondary + "/api/v1/agents/ingest");
 
@@ -126,6 +132,21 @@ namespace MonitoringPlatform.Agent.Setup
             if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(uri.Host) || uri.AbsolutePath != "/")
                 throw new InvalidOperationException(field + " must be an HTTPS address without a path.");
             return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        }
+
+        private static string GetServerCertificateSha256(string endpoint)
+        {
+            var uri = new Uri(endpoint);
+            using (var client = new TcpClient())
+            {
+                client.Connect(uri.Host, uri.Port);
+                using (var stream = new SslStream(client.GetStream(), false, (_, _, _, _) => true))
+                {
+                    stream.AuthenticateAsClient(uri.Host);
+                    using (var certificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(stream.RemoteCertificate))
+                        return BitConverter.ToString(SHA256.Create().ComputeHash(certificate.RawData)).Replace("-", "");
+                }
+            }
         }
 
         private static string WriteProtectedToken(string token)
