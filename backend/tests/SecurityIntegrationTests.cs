@@ -96,6 +96,46 @@ public sealed class SecurityIntegrationTests
     }
 
     [Fact]
+    public async Task Admin_CanPersistSettings_WithoutReadingBackSecrets()
+    {
+        await using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        var adminToken = await LoginAsync(client, ApiFactory.AdminUser, ApiFactory.AdminPassword);
+        Authorize(client, adminToken);
+
+        var update = await client.PutAsJsonAsync("/api/settings", new
+        {
+            siteName = "预发布机房",
+            siteDescription = "仅用于隔离验证",
+            smsEnabled = true,
+            rolloutMode = "test",
+            region = "ap-guangzhou",
+            sdkAppId = "1400000000",
+            signName = "运维平台",
+            templateId = "100001",
+            testPhoneNumbers = new[] { "+8613800000000" },
+            secretId = "test-secret-id",
+            secretKey = "test-secret-key"
+        }, CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings", CancellationToken);
+        Assert.Equal("预发布机房", settings.GetProperty("siteName").GetString());
+        var sms = settings.GetProperty("sms");
+        Assert.True(sms.GetProperty("secretIdConfigured").GetBoolean());
+        Assert.True(sms.GetProperty("secretKeyConfigured").GetBoolean());
+        Assert.False(sms.TryGetProperty("secretId", out _));
+        Assert.False(sms.TryGetProperty("secretKey", out _));
+
+        var groups = await client.GetFromJsonAsync<JsonElement>("/api/settings/server-groups", CancellationToken);
+        Assert.True(groups.GetArrayLength() > 0);
+
+        await CreateUserAsync(client, adminToken, "settings-operator", "Settings-Operator-2026!", "Operator");
+        var operatorToken = await LoginAsync(client, "settings-operator", "Settings-Operator-2026!");
+        Authorize(client, operatorToken);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/settings", CancellationToken)).StatusCode);
+    }
+
+    [Fact]
     public async Task Operator_CanAcknowledgeIncident_ButCannotModifyAssets()
     {
         await using var factory = new ApiFactory();

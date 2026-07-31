@@ -59,7 +59,6 @@ builder.Services.AddAuthentication(options =>
     .AddScheme<AuthenticationSchemeOptions, AgentKeyAuthenticationHandler>(AgentKeyAuthenticationHandler.SchemeName, _ => { });
 builder.Services.AddAuthorization(SecurityPolicies.Configure);
 builder.Services.AddScoped<IPasswordHasher<LocalUser>, PasswordHasher<LocalUser>>();
-builder.Services.Configure<SmsOptions>(builder.Configuration.GetSection("TencentCloudSms"));
 builder.Services.Configure<ProbeWorkerOptions>(builder.Configuration.GetSection(ProbeWorkerOptions.SectionName));
 builder.Services.Configure<DataMaintenanceOptions>(builder.Configuration.GetSection(DataMaintenanceOptions.SectionName));
 builder.Services.Configure<AgentHealthOptions>(builder.Configuration.GetSection(AgentHealthOptions.SectionName));
@@ -79,6 +78,7 @@ builder.Services.AddHostedService<AgentHealthWorker>();
 builder.Services.AddHostedService<NotificationWorker>();
 builder.Services.AddHostedService<HaLeaseWorker>();
 builder.Services.AddHostedService<HaReplicationWorker>();
+builder.Services.AddScoped<RuntimeSettingsStore>();
 builder.Services.AddScoped<SmsSender>();
 builder.Services.AddScoped<AgentEnrollmentService>();
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login", limiter =>
@@ -299,13 +299,17 @@ read.MapGet("/notification-deliveries", async (MonitoringDbContext db) => Result
 read.MapGet("/probes", async (MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).OrderBy(probe => probe.Host!.Name).ThenBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/hosts/{name}/probes", async (string name, MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).Where(probe => probe.Host!.Name == name.ToUpperInvariant()).OrderBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/ha", (HaLeaseState haLease) => Results.Ok(haLease.Status(DateTimeOffset.UtcNow)));
-read.MapGet("/sms-status", (Microsoft.Extensions.Options.IOptions<SmsOptions> configured) => Results.Ok(new
+read.MapGet("/sms-status", async (RuntimeSettingsStore settingsStore) =>
 {
-    enabled = configured.Value.Enabled,
-    rolloutMode = configured.Value.RolloutMode,
-    configured = !string.IsNullOrWhiteSpace(configured.Value.SdkAppId) && !string.IsNullOrWhiteSpace(configured.Value.SignName) && !string.IsNullOrWhiteSpace(configured.Value.TemplateId),
-    testPhoneCount = configured.Value.TestPhoneNumbers?.Length ?? 0
-}));
+    var settings = await settingsStore.GetDtoAsync();
+    return Results.Ok(new
+    {
+        enabled = settings.Sms.Enabled,
+        rolloutMode = settings.Sms.RolloutMode,
+        configured = settings.Sms.SecretIdConfigured && settings.Sms.SecretKeyConfigured && !string.IsNullOrWhiteSpace(settings.Sms.SdkAppId) && !string.IsNullOrWhiteSpace(settings.Sms.SignName) && !string.IsNullOrWhiteSpace(settings.Sms.TemplateId),
+        testPhoneCount = settings.Sms.TestPhoneNumbers.Length
+    });
+});
 var operations = app.MapGroup("/api").RequireAuthorization(SecurityPolicies.Operator);
 operations.MapGet("/audit", async (MonitoringDbContext db) => Results.Ok(
     (await db.AuditLogs.ToListAsync()).OrderByDescending(item => item.CreatedAt).Take(100)));
@@ -553,6 +557,30 @@ administration.MapDelete("/notification-policies/{id:int}", async (int id, Claim
     await Audit.AddAsync(db, principal, "删除通知策略", policy.Name);
     await db.SaveChangesAsync();
     return Results.NoContent();
+});
+administration.MapGet("/settings", async (RuntimeSettingsStore settingsStore, CancellationToken cancellationToken) =>
+    Results.Ok(await settingsStore.GetDtoAsync(cancellationToken)));
+administration.MapPut("/settings", async (SystemSettingsUpdateRequest request, ClaimsPrincipal principal, MonitoringDbContext db, RuntimeSettingsStore settingsStore, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var saved = await settingsStore.UpdateAsync(request, cancellationToken);
+        await Audit.AddAsync(db, principal, "更新全局设置", "已更新站点信息与腾讯云短信运行配置。");
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Ok(saved);
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["settings"] = [exception.Message] });
+    }
+});
+administration.MapGet("/settings/server-groups", async (MonitoringDbContext db, CancellationToken cancellationToken) =>
+{
+    var groups = await db.Hosts.GroupBy(host => host.Group)
+        .Select(group => new { Name = group.Key, HostCount = group.Count() })
+        .OrderBy(group => group.Name)
+        .ToListAsync(cancellationToken);
+    return Results.Ok(groups.Select(group => new ServerGroupDto(string.IsNullOrWhiteSpace(group.Name) ? "默认组" : group.Name, group.HostCount)));
 });
 administration.MapPost("/notifications/test-sms", async (SmsTestRequest request, SmsSender sender) =>
 {

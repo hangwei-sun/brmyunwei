@@ -20,6 +20,7 @@ sealed class MonitoringDbContext(
     public DbSet<HostServiceStatus> HostServiceStatuses => Set<HostServiceStatus>();
     public DbSet<MetricRuleState> MetricRuleStates => Set<MetricRuleState>();
     public DbSet<NotificationDeliveryState> NotificationDeliveryStates => Set<NotificationDeliveryState>();
+    public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
@@ -88,6 +89,22 @@ sealed class ProbeDefinition
 sealed class HostServiceStatus { public int HostId { get; set; } public required string Name { get; set; } public required string Status { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class MetricRuleState { public int HostId { get; set; } public int AlertRuleId { get; set; } public int ConsecutiveFailures { get; set; } public int ConsecutiveSuccesses { get; set; } public bool Firing { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class NotificationDeliveryState { public Guid IncidentId { get; set; } public int NotificationPolicyId { get; set; } public string Status { get; set; } = "待发送"; public int Attempts { get; set; } public DateTimeOffset? LastAttemptAt { get; set; } public DateTimeOffset? LastSentAt { get; set; } public DateTimeOffset NextAttemptAt { get; set; } public string? RequestId { get; set; } public string? LastError { get; set; } }
+sealed class SystemSettings
+{
+    public int Id { get; set; }
+    public string SiteName { get; set; } = "机房运维监控";
+    public string SiteDescription { get; set; } = "机房基础设施与业务系统运行状态概览";
+    public bool SmsEnabled { get; set; }
+    public string SmsRolloutMode { get; set; } = "disabled";
+    public string SmsRegion { get; set; } = "ap-guangzhou";
+    public string SmsSdkAppId { get; set; } = "";
+    public string SmsSignName { get; set; } = "";
+    public string SmsTemplateId { get; set; } = "";
+    public string SmsSecretIdProtected { get; set; } = "";
+    public string SmsSecretKeyProtected { get; set; } = "";
+    public string SmsTestPhoneNumbersJson { get; set; } = "[]";
+    public DateTimeOffset UpdatedAt { get; set; }
+}
 
 static class SecuritySchema
 {
@@ -173,6 +190,23 @@ static class SecuritySchema
             );
             """);
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ProbeDefinitions_HostId_Fingerprint\" ON \"ProbeDefinitions\" (\"HostId\", \"Fingerprint\");");
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "SystemSettings" (
+              "Id" INTEGER NOT NULL CONSTRAINT "PK_SystemSettings" PRIMARY KEY,
+              "SiteName" TEXT NOT NULL,
+              "SiteDescription" TEXT NOT NULL,
+              "SmsEnabled" INTEGER NOT NULL,
+              "SmsRolloutMode" TEXT NOT NULL,
+              "SmsRegion" TEXT NOT NULL,
+              "SmsSdkAppId" TEXT NOT NULL,
+              "SmsSignName" TEXT NOT NULL,
+              "SmsTemplateId" TEXT NOT NULL,
+              "SmsSecretIdProtected" TEXT NOT NULL,
+              "SmsSecretKeyProtected" TEXT NOT NULL,
+              "SmsTestPhoneNumbersJson" TEXT NOT NULL,
+              "UpdatedAt" TEXT NOT NULL
+            );
+            """);
         await EnsureIncidentColumnsAsync(db);
         await EnsureHostAndRuleColumnsAsync(db);
         await db.Database.ExecuteSqlRawAsync("""

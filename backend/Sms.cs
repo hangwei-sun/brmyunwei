@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using TencentCloud.Common;
 using TencentCloud.Common.Profile;
 using TencentCloud.Sms.V20210111;
@@ -23,17 +22,17 @@ static class SmsSafety
         return null;
     }
 }
-sealed class SmsSender(IOptions<SmsOptions> options, ILogger<SmsSender> logger)
+sealed class SmsSender(RuntimeSettingsStore settingsStore, ILogger<SmsSender> logger)
 {
-    public Task<SmsSendResult> SendAsync(string[] phoneNumbers, string[] templateParameters)
+    public async Task<SmsSendResult> SendAsync(string[] phoneNumbers, string[] templateParameters)
     {
-        var settings = options.Value;
+        var settings = await settingsStore.GetSmsOptionsAsync();
         var safetyError = SmsSafety.Validate(settings, phoneNumbers);
-        if (safetyError is not null) return Task.FromResult(new SmsSendResult(false, null, safetyError));
+        if (safetyError is not null) return new SmsSendResult(false, null, safetyError);
         if (string.IsNullOrWhiteSpace(settings.SecretId) || string.IsNullOrWhiteSpace(settings.SecretKey) || string.IsNullOrWhiteSpace(settings.SdkAppId) || string.IsNullOrWhiteSpace(settings.SignName) || string.IsNullOrWhiteSpace(settings.TemplateId))
-            return Task.FromResult(new SmsSendResult(false, null, "TencentCloudSms is not configured."));
+            return new SmsSendResult(false, null, "TencentCloudSms is not configured.");
         if (templateParameters is null || templateParameters.Length is < 1 or > 12 || templateParameters.Any(value => value is null || value.Length > 128))
-            return Task.FromResult(new SmsSendResult(false, null, "Template parameters are invalid."));
+            return new SmsSendResult(false, null, "Template parameters are invalid.");
         try
         {
             var credential = new Credential { SecretId = settings.SecretId, SecretKey = settings.SecretKey };
@@ -46,14 +45,14 @@ sealed class SmsSender(IOptions<SmsOptions> options, ILogger<SmsSender> logger)
                 var error = failures.Count > 0
                     ? string.Join("; ", failures.Select(status => $"{status.Code}: {status.Message}"))
                     : $"Tencent Cloud returned {statuses.Length} statuses for {phoneNumbers.Length} recipients.";
-                return Task.FromResult(new SmsSendResult(false, response.RequestId, error));
+                return new SmsSendResult(false, response.RequestId, error);
             }
-            return Task.FromResult(new SmsSendResult(true, response.RequestId, null));
+            return new SmsSendResult(true, response.RequestId, null);
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Tencent Cloud SMS send failed");
-            return Task.FromResult(new SmsSendResult(false, null, exception.Message));
+            return new SmsSendResult(false, null, exception.Message);
         }
     }
 }

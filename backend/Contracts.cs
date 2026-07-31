@@ -55,6 +55,17 @@ static class Validation
         return null;
     }
 
+    public static string? ValidateSystemSettings(SystemSettingsUpdateRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SiteName) || request.SiteName.Trim().Length > 80) return "站点名称为必填项，且不得超过 80 个字符。";
+        if (request.SiteDescription is { Length: > 160 }) return "站点说明不得超过 160 个字符。";
+        if (request.RolloutMode?.Trim().ToLowerInvariant() is not ("disabled" or "test" or "live")) return "短信投放模式必须为 disabled、test 或 live。";
+        if (request.Region is { Length: > 64 } || request.SdkAppId is { Length: > 64 } || request.SignName is { Length: > 128 } || request.TemplateId is { Length: > 64 }) return "短信配置字段长度无效。";
+        var numbers = RuntimeSettingsStore.NormalizePhoneNumbers(request.TestPhoneNumbers);
+        if (numbers.Length > 50 || numbers.Any(number => !System.Text.RegularExpressions.Regex.IsMatch(number, @"^\+[1-9]\d{7,14}$"))) return "测试号码必须使用 E.164 格式，且最多 50 个。";
+        return null;
+    }
+
     public static string? ValidateProbe(ProbeRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 80) return "探测名称为必填项，且不得超过 80 个字符。";

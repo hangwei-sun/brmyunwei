@@ -113,6 +113,33 @@ export const updateNotificationPolicy = (id, policy) => requestJson(`/api/notifi
 });
 export const deleteNotificationPolicy = (id) => requestJson(`/api/notification-policies/${id}`, { method: "DELETE" });
 
+export const getSystemSettings = () => requestJson("/api/settings");
+export const getServerGroups = () => requestJson("/api/settings/server-groups");
+export const updateSystemSettings = (settings) => requestJson("/api/settings", {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    siteName: settings.siteName,
+    siteDescription: settings.siteDescription,
+    smsEnabled: settings.sms.enabled,
+    rolloutMode: settings.sms.rolloutMode,
+    region: settings.sms.region,
+    sdkAppId: settings.sms.sdkAppId,
+    signName: settings.sms.signName,
+    templateId: settings.sms.templateId,
+    testPhoneNumbers: settings.sms.testPhoneNumbers,
+    secretId: settings.sms.secretId || null,
+    secretKey: settings.sms.secretKey || null,
+    clearSecretId: settings.sms.clearSecretId,
+    clearSecretKey: settings.sms.clearSecretKey,
+  }),
+});
+export const sendTestSms = (phoneNumbers) => requestJson("/api/notifications/test-sms", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ phoneNumbers, templateParameters: ["测试主机", "设置页测试短信", "正常", new Date().toLocaleString("zh-CN", { hour12: false })] }),
+});
+
 export const getUsers = () => requestJson("/api/users");
 export const createUser = (user) => requestJson("/api/users", {
   method: "POST",

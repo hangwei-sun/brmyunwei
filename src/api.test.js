@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, clearAccessToken, getDashboard, login, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateUser } from "./api.js";
+import { ApiError, clearAccessToken, getDashboard, getSystemSettings, login, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateSystemSettings, updateUser } from "./api.js";
 
 test("requestJson returns a successful JSON payload", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ ok: true }), {
@@ -96,5 +96,19 @@ test("notification and user updates use their documented PUT contracts", async (
   assert.deepEqual(calls, [
     ["/api/notification-policies/3", { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", enabled: true, repeatMinutes: 20 }],
     ["/api/users/ops%20name", { role: "Operator", enabled: false, password: null }],
+  ]);
+});
+
+test("system settings save sends secrets only on write and reads the settings endpoint", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (path, options = {}) => {
+    calls.push([path, options.method || "GET", options.body ? JSON.parse(options.body) : null]);
+    return new Response(JSON.stringify({ siteName: "机房运维监控", sms: {} }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  await getSystemSettings();
+  await updateSystemSettings({ siteName: "预发布机房", siteDescription: "说明", sms: { enabled: true, rolloutMode: "test", region: "ap-guangzhou", sdkAppId: "1400000000", signName: "运维平台", templateId: "100001", testPhoneNumbers: ["+8613800000000"], secretId: "id", secretKey: "key", clearSecretId: false, clearSecretKey: false } });
+  assert.deepEqual(calls, [
+    ["/api/settings", "GET", null],
+    ["/api/settings", "PUT", { siteName: "预发布机房", siteDescription: "说明", smsEnabled: true, rolloutMode: "test", region: "ap-guangzhou", sdkAppId: "1400000000", signName: "运维平台", templateId: "100001", testPhoneNumbers: ["+8613800000000"], secretId: "id", secretKey: "key", clearSecretId: false, clearSecretKey: false }],
   ]);
 });
