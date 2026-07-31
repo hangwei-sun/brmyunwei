@@ -74,18 +74,27 @@ try {
   if (git status --porcelain) { throw 'Installer builds require a clean Git working tree.' }
   if (-not $PSCmdlet.ShouldProcess($output, 'Build signed Control, Witness, and Agent MSI packages')) { return }
   New-Item -ItemType Directory -Path $output -Force | Out-Null
-  $frontendToolRoot = '.\node_modules'
-  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath (Join-Path $frontendToolRoot '.bin\vite.cmd') -PathType Leaf)) {
-    $frontendToolRoot = '.\installer\.frontend-build'
-    if (Test-Path -LiteralPath $frontendToolRoot) { Remove-Item -LiteralPath $frontendToolRoot -Recurse -Force }
-    New-Item -ItemType Directory -Path $frontendToolRoot -Force | Out-Null
-    Copy-Item -LiteralPath '.\package.json', '.\package-lock.json' -Destination $frontendToolRoot -Force
-    npm ci --prefix $frontendToolRoot
+  $frontendBuildRoot = $null
+  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules\.bin\vite.cmd' -PathType Leaf)) {
+    $frontendBuildRoot = '.\installer\.frontend-build'
+    if (Test-Path -LiteralPath $frontendBuildRoot) { Remove-Item -LiteralPath $frontendBuildRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $frontendBuildRoot -Force | Out-Null
+    Copy-Item -LiteralPath '.\package.json', '.\package-lock.json', '.\index.html', '.\vite.config.mjs' -Destination $frontendBuildRoot -Force
+    Copy-Item -LiteralPath '.\src' -Destination $frontendBuildRoot -Recurse -Force
+    if (Test-Path -LiteralPath '.\public' -PathType Container) { Copy-Item -LiteralPath '.\public' -Destination $frontendBuildRoot -Recurse -Force }
+    npm ci --prefix $frontendBuildRoot
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
-    $frontendToolRoot = Join-Path $frontendToolRoot 'node_modules'
+    Push-Location $frontendBuildRoot
+    try { npm run build }
+    finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+    Remove-Item -LiteralPath '.\dist' -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path $frontendBuildRoot 'dist') -Destination '.\dist' -Recurse -Force
   }
-  & (Join-Path $frontendToolRoot '.bin\vite.cmd') build
-  if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+  else {
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+  }
   dotnet publish '.\backend\MonitoringPlatform.Api.csproj' -c Release -r win-x64 --self-contained true -p:Version=$ProductVersion -o '.\installer\.stage\control\app'
   if ($LASTEXITCODE -ne 0) { throw 'Control application publish failed.' }
   dotnet publish '.\witness\MonitoringPlatform.Witness.csproj' -c Release -r win-x64 --self-contained true -p:Version=$ProductVersion -o '.\installer\.stage\witness\app'
