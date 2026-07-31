@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')][string]$CodeSigningCertificateThumbprint,
   [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\installers'),
   [string]$WixPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'agent\.tools\wix\wix.exe'),
-  [string]$SignToolPath
+  [string]$SignToolPath,
+  [switch]$RestoreFrontendDependencies
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,8 +74,10 @@ try {
   if (git status --porcelain) { throw 'Installer builds require a clean Git working tree.' }
   if (-not $PSCmdlet.ShouldProcess($output, 'Build signed Control, Witness, and Agent MSI packages')) { return }
   New-Item -ItemType Directory -Path $output -Force | Out-Null
-  npm ci
-  if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules' -PathType Container)) {
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+  }
   npm run build
   if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
   dotnet publish '.\backend\MonitoringPlatform.Api.csproj' -c Release -r win-x64 --self-contained true -p:Version=$ProductVersion -o '.\installer\.stage\control\app'
