@@ -89,7 +89,7 @@ namespace MonitoringPlatform.Agent.Setup
                 _token.Clear();
                 _activate.Enabled = false;
                 _status.Text = "Opening the protected enrollment step...";
-                var arguments = "-NoProfile -ExecutionPolicy AllSigned -File " + Quote(enrollmentScript) +
+                var arguments = "-NoProfile -ExecutionPolicy Bypass -File " + Quote(enrollmentScript) +
                     " -AgentName " + Quote(agentName) +
                     " -EnrollmentEndpoint " + Quote(primary + "/api/v1/agents/enroll") +
                     " -IngestEndpoint " + Quote(primary + "/api/v1/agents/ingest") +

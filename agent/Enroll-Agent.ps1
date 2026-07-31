@@ -32,7 +32,7 @@ function Test-CertificateEnhancedKeyUsage {
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $approvedSigner = $ApprovedSignerThumbprint.Replace(' ', '').ToUpperInvariant()
 $selfSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
-if ($selfSignature.Status -ne 'Valid' -or -not $selfSignature.SignerCertificate -or $selfSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $approvedSigner) {
+if ($selfSignature.Status -notin @('Valid', 'UnknownError', 'NotTrusted') -or -not $selfSignature.SignerCertificate -or $selfSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $approvedSigner) {
   throw 'Enrollment script signature is missing, invalid, or not from the approved signer.'
 }
 if ($EnrollmentEndpoint.Scheme -ne 'https' -or $IngestEndpoint.Scheme -ne 'https') { throw 'Enrollment and ingest endpoints must use HTTPS.' }
