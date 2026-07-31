@@ -109,7 +109,7 @@ try {
   Remove-Item -LiteralPath '.\installer\.stage\control\app' -Recurse -Force
   Compress-Archive -Path '.\installer\.stage\witness\app\*' -DestinationPath '.\installer\.stage\witness\app.zip' -CompressionLevel Optimal
   Remove-Item -LiteralPath '.\installer\.stage\witness\app' -Recurse -Force
-  Get-ChildItem -LiteralPath '.\installer\.stage' -Recurse -File -Include '*.exe','*.dll' | ForEach-Object { Invoke-SignFile $_.FullName }
+  Get-ChildItem -LiteralPath '.\installer\.stage' -Recurse -File -Filter 'MonitoringPlatform.Control.Setup.exe' | ForEach-Object { Invoke-SignFile $_.FullName }
   Get-ChildItem -LiteralPath '.\installer\.stage' -Recurse -File -Filter '*.ps1' | ForEach-Object { Set-AuthenticodeSignature -LiteralPath $_.FullName -Certificate $certificate -HashAlgorithm SHA256 | Out-Null }
   New-WixPayloadFragment -SourceDirectory '.\installer\.stage\control' -GroupId 'ControlPayload' -OutputPath '.\installer\.stage\ControlPayload.wxs'
   New-WixPayloadFragment -SourceDirectory '.\installer\.stage\witness' -GroupId 'WitnessPayload' -OutputPath '.\installer\.stage\WitnessPayload.wxs'
