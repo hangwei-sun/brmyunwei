@@ -11,6 +11,8 @@ agent/.tools/
 agent/local-signer/
 agent/local-package/
 agent/local-package*.zip*
+installer/.stage/
+installer/.frontend-build/
 backend/Data/*.db
 backend/Data/*.db-wal
 backend/Data/*.db-shm
