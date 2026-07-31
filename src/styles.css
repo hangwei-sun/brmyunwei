@@ -27,3 +27,33 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } a
 .notification-center { position: absolute; top: 66px; right: 72px; width: min(440px, calc(100vw - 24px)); max-height: min(620px, calc(100vh - 76px)); display: flex; flex-direction: column; overflow: hidden; background: #fff; border: 1px solid #dce3ed; border-radius: 6px; box-shadow: 0 14px 34px rgb(16 24 40 / 18%); }
 .notification-heading { display: flex; justify-content: space-between; align-items: start; gap: 14px; padding: 14px 15px 11px; border-bottom: 1px solid #e5eaf1; }.notification-heading h2 { color: #172033; font-size: 16px; }.notification-heading p { margin-top: 4px; color: #667085; font-size: 12px; }.notification-toolbar { min-height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #e5eaf1; }.notification-toolbar .text-button:disabled { color: #98a2b3; cursor: not-allowed; }.notification-tabs { display: flex; height: 42px; gap: 5px; }.notification-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 0 7px; background: transparent; color: #667085; font-size: 13px; }.notification-tabs .selected { color: #1459cb; border-bottom-color: #1459cb; font-weight: 600; }.notification-list { overflow-y: auto; }.notification-item { position: relative; width: 100%; min-height: 98px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; text-align: left; padding: 12px 28px 12px 14px; border: 0; border-bottom: 1px solid #e9edf2; background: #fff; color: #344054; }.notification-item:hover { background: #f5f9ff; }.notification-item.is-read { background: #fbfcfe; }.notification-item > span { min-width: 0; }.notification-item strong { display: block; color: #172033; font-size: 13px; font-weight: 600; line-height: 1.35; }.notification-item small { overflow: hidden; margin-top: 3px; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }.notification-item p { display: -webkit-box; overflow: hidden; margin-top: 5px; color: #475467; font-size: 12px; line-height: 1.4; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }.notification-item time { display: block; margin-top: 5px; color: #98a2b3; font-size: 11px; }.notification-item > i { position: absolute; top: 17px; right: 13px; width: 7px; height: 7px; border-radius: 50%; background: #1459cb; }.notification-center .data-state { min-height: 150px; }
 @media (max-width: 720px) { .notification-center { top: 48px; right: 10px; max-height: calc(100vh - 60px); } }
+
+/* Keep management dialogs compact and visually anchored at their header. */
+.modal-heading > div { min-width: 0; }
+.modal-heading > .icon-button { flex: 0 0 32px; width: 32px; height: 32px; margin: -2px -2px 0 0; }
+.modal-heading > .icon-button svg { width: 18px; height: 18px; stroke-width: 2.25; }
+.modal-wide { width: min(100%, 720px); }
+
+/* Asset search gets the spare row width rather than clipping its placeholder. */
+.filters > label:first-child { flex: 1 1 260px; min-width: 0; max-width: 560px; }
+
+/* Notification policies have many independent columns: retain readable cells and scroll the table. */
+.notification-policy-layout > section { grid-column: 1 / -1; }
+.notification-policy-layout .table-wrap table { min-width: 1060px; }
+.notification-policy-layout td { line-height: 1.4; }
+.notification-policy-layout td:nth-child(2),
+.notification-policy-layout td:nth-child(4),
+.notification-policy-layout td:nth-child(6),
+.notification-policy-layout td:nth-child(7),
+.notification-policy-layout td:nth-child(8),
+.notification-policy-layout td:last-child { white-space: nowrap; }
+.notification-policy-layout .tag-enabled,
+.notification-policy-layout .tag-disabled { display: inline-flex; align-items: center; white-space: nowrap; }
+.notification-policy-layout .text-button { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .filters { flex-wrap: wrap; overflow: visible; }
+  .filters > label:first-child { flex-basis: 100%; max-width: none; }
+  .filters select { flex: 1 1 135px; min-width: 0; }
+  .notification-policy-layout .table-wrap table { min-width: 1060px; }
+}
