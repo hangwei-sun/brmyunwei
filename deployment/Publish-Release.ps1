@@ -126,9 +126,11 @@ try {
         'Install-Service.ps1', 'Uninstall-Service.ps1', 'Restore-Database.ps1',
         'Initialize-IsolatedPrerelease.ps1', 'Start-IsolatedPrerelease.ps1',
         'Get-IsolatedPrereleaseCredential.ps1', 'Invoke-HaPromotion.ps1', 'Set-HaNodePassive.ps1',
-        'Invoke-PrereleaseAcceptance.ps1', 'Test-WindowsAgentPrerelease.ps1',
-        'HA-受控切换与恢复回放.md'
+        'Invoke-PrereleaseAcceptance.ps1', 'Test-WindowsAgentPrerelease.ps1'
     )
+    $haRunbooks = @(Get-ChildItem -LiteralPath '.\deployment' -Filter 'HA-*.md' -File)
+    if ($haRunbooks.Count -ne 1) { throw "Expected exactly one HA runbook, found $($haRunbooks.Count)." }
+    Copy-Item -LiteralPath $haRunbooks[0].FullName -Destination $releaseRoot -Force
     Copy-ReleaseItems -SourceDirectory '.\agent' -DestinationDirectory $agentRoot -Names @(
         'Install-Agent.ps1', 'Enroll-Agent.ps1', 'Rotate-AgentCertificate.ps1', 'Upgrade-Agent.ps1',
         'Uninstall-Agent.ps1', 'Verify-AgentPackage.ps1', 'Publish-SignedAgent.ps1',
