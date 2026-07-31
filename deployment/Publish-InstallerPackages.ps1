@@ -73,6 +73,7 @@ Push-Location $repoRoot
 try {
   if (git status --porcelain) { throw 'Installer builds require a clean Git working tree.' }
   if (-not $PSCmdlet.ShouldProcess($output, 'Build signed Control, Witness, and Agent MSI packages')) { return }
+  Remove-Item -LiteralPath '.\installer\.stage' -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Path $output -Force | Out-Null
   $frontendBuildRoot = $null
   if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules\.bin\vite.cmd' -PathType Leaf)) {
