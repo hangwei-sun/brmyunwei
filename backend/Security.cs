@@ -82,6 +82,8 @@ sealed class AgentCertificateAuthenticationHandler(
 
 static class SecurityPrincipal
 {
+    public static int? UserId(ClaimsPrincipal principal) => int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null;
+
     public static ClaimsPrincipal ForUser(LocalUser user)
     {
         var identity = new ClaimsIdentity(BearerTokenDefaults.AuthenticationScheme);

@@ -98,6 +98,7 @@ const notificationPolicyBody = (policy) => ({
   serverGroup: policy.serverGroup,
   severity: policy.severity,
   contactGroup: policy.contactGroup,
+  channel: policy.channel || "sms",
   enabled: policy.enabled,
   repeatMinutes: Number(policy.repeatMinutes),
 });
@@ -139,6 +140,10 @@ export const sendTestSms = (phoneNumbers) => requestJson("/api/notifications/tes
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ phoneNumbers, templateParameters: ["测试主机", "设置页测试短信", "正常", new Date().toLocaleString("zh-CN", { hour12: false })] }),
 });
+
+export const getInAppNotifications = (unreadOnly = false) => requestJson(`/api/in-app-notifications?unreadOnly=${unreadOnly}`);
+export const markInAppNotificationRead = (id) => requestJson(`/api/in-app-notifications/${encodeURIComponent(id)}/read`, { method: "POST" });
+export const markAllInAppNotificationsRead = () => requestJson("/api/in-app-notifications/read-all", { method: "POST" });
 
 export const getUsers = () => requestJson("/api/users");
 export const createUser = (user) => requestJson("/api/users", {

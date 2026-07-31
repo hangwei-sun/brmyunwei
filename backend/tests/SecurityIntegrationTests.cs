@@ -335,6 +335,58 @@ public sealed class SecurityIntegrationTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/notification-policies/{policyId}", CancellationToken)).StatusCode);
     }
 
+    [Fact]
+    public async Task InAppNotifications_ArePerUser_Idempotent_AndCanBeMarkedRead()
+    {
+        await using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        var adminToken = await LoginAsync(client, ApiFactory.AdminUser, ApiFactory.AdminPassword);
+        await CreateUserAsync(client, adminToken, "notice-operator", "Notice-Operator-2026!", "Operator");
+        await CreateUserAsync(client, adminToken, "notice-operator-2", "Notice-Operator-2-2026!", "Operator");
+        Authorize(client, adminToken);
+        var create = await client.PostAsJsonAsync("/api/notification-policies", new
+        {
+            name = "生产严重告警站内信",
+            serverGroup = "生产服务器组",
+            severity = "严重",
+            contactGroup = "本地运维人员",
+            channel = "inApp",
+            enabled = true,
+            repeatMinutes = 15
+        }, CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
+            await NotificationPlanner.EnsureStatesAsync(db, DateTimeOffset.UtcNow, CancellationToken);
+            var firstCount = await db.InAppNotifications.CountAsync(CancellationToken);
+            Assert.True(firstCount >= 3);
+            await NotificationPlanner.EnsureStatesAsync(db, DateTimeOffset.UtcNow.AddSeconds(1), CancellationToken);
+            Assert.Equal(firstCount, await db.InAppNotifications.CountAsync(CancellationToken));
+        }
+
+        var operatorToken = await LoginAsync(client, "notice-operator", "Notice-Operator-2026!");
+        Authorize(client, operatorToken);
+        var unreadCount = await client.GetFromJsonAsync<JsonElement>("/api/in-app-notifications/unread-count", CancellationToken);
+        var initialUnreadCount = unreadCount.GetProperty("count").GetInt32();
+        Assert.True(initialUnreadCount > 0);
+        var noticesResponse = await client.GetAsync("/api/in-app-notifications?unreadOnly=true", CancellationToken);
+        var noticesBody = await noticesResponse.Content.ReadAsStringAsync(CancellationToken);
+        Assert.True(noticesResponse.IsSuccessStatusCode, noticesBody);
+        var notices = JsonSerializer.Deserialize<JsonElement>(noticesBody);
+        var ownNoticeId = notices.EnumerateArray().First().GetProperty("id").GetInt64();
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/in-app-notifications/{ownNoticeId}/read", null, CancellationToken)).StatusCode);
+        Assert.Equal(initialUnreadCount - 1, (await client.GetFromJsonAsync<JsonElement>("/api/in-app-notifications/unread-count", CancellationToken)).GetProperty("count").GetInt32());
+
+        var secondOperatorToken = await LoginAsync(client, "notice-operator-2", "Notice-Operator-2-2026!");
+        Authorize(client, secondOperatorToken);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"/api/in-app-notifications/{ownNoticeId}/read", null, CancellationToken)).StatusCode);
+        var markAll = await client.PostAsync("/api/in-app-notifications/read-all", null, CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, markAll.StatusCode);
+        Assert.True((await markAll.Content.ReadFromJsonAsync<JsonElement>(CancellationToken)).GetProperty("markedRead").GetInt32() > 0);
+    }
+
     private static object ExtendedIngest(long sequence, double cpu, DateTimeOffset bootTime, string serviceStatus) => new
     {
         hostName = "TEST-TELEMETRY",

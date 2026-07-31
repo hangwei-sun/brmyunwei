@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, clearAccessToken, getDashboard, getSystemSettings, login, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateSystemSettings, updateUser } from "./api.js";
+import { ApiError, clearAccessToken, getDashboard, getInAppNotifications, getSystemSettings, login, markAllInAppNotificationsRead, markInAppNotificationRead, normalizeDashboard, requestJson, setAccessToken, updateNotificationPolicy, updateRule, updateSystemSettings, updateUser } from "./api.js";
 
 test("requestJson returns a successful JSON payload", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ ok: true }), {
@@ -91,10 +91,10 @@ test("notification and user updates use their documented PUT contracts", async (
     calls.push([path, JSON.parse(options.body)]);
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
   });
-  await updateNotificationPolicy(3, { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", enabled: true, repeatMinutes: "20" });
+  await updateNotificationPolicy(3, { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", channel: "inApp", enabled: true, repeatMinutes: "20" });
   await updateUser("ops name", { role: "Operator", enabled: false, password: "" });
   assert.deepEqual(calls, [
-    ["/api/notification-policies/3", { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", enabled: true, repeatMinutes: 20 }],
+    ["/api/notification-policies/3", { name: "严重告警", serverGroup: "生产组", severity: "严重", contactGroup: "值班组", channel: "inApp", enabled: true, repeatMinutes: 20 }],
     ["/api/users/ops%20name", { role: "Operator", enabled: false, password: null }],
   ]);
 });
@@ -110,5 +110,21 @@ test("system settings save sends secrets only on write and reads the settings en
   assert.deepEqual(calls, [
     ["/api/settings", "GET", null],
     ["/api/settings", "PUT", { siteName: "预发布机房", siteDescription: "说明", smsEnabled: true, rolloutMode: "test", region: "ap-guangzhou", sdkAppId: "1400000000", signName: "运维平台", templateId: "100001", testPhoneNumbers: ["+8613800000000"], secretId: "id", secretKey: "key", clearSecretId: false, clearSecretKey: false }],
+  ]);
+});
+
+test("in-app notification API uses unread filtering and read commands", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (path, options = {}) => {
+    calls.push([path, options.method || "GET"]);
+    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  await getInAppNotifications(true);
+  await markInAppNotificationRead("notice / 1");
+  await markAllInAppNotificationsRead();
+  assert.deepEqual(calls, [
+    ["/api/in-app-notifications?unreadOnly=true", "GET"],
+    ["/api/in-app-notifications/notice%20%2F%201/read", "POST"],
+    ["/api/in-app-notifications/read-all", "POST"],
   ]);
 });

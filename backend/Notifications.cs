@@ -131,9 +131,14 @@ static class NotificationPlanner
         var policies = await db.NotificationPolicies.Where(item => item.Enabled).ToListAsync(cancellationToken);
         var existing = (await db.NotificationDeliveryStates.Select(item => new { item.IncidentId, item.NotificationPolicyId }).ToListAsync(cancellationToken))
             .Select(item => (item.IncidentId, item.NotificationPolicyId)).ToHashSet();
+        var inAppPolicies = policies.Where(item => item.Channel == NotificationChannel.InApp).ToList();
+        var recipients = await db.LocalUsers.Where(item => item.Enabled && (item.Role == SecurityRoles.Admin || item.Role == SecurityRoles.Operator))
+            .Select(item => new { item.Id }).ToListAsync(cancellationToken);
+        var inAppExisting = (await db.InAppNotifications.Select(item => new { item.IncidentId, item.NotificationPolicyId, item.UserId }).ToListAsync(cancellationToken))
+            .Select(item => (item.IncidentId, item.NotificationPolicyId, item.UserId)).ToHashSet();
         foreach (var incident in incidents)
         {
-            foreach (var policy in policies.Where(policy => Matches(policy, incident)))
+            foreach (var policy in policies.Where(policy => policy.Channel == NotificationChannel.Sms && Matches(policy, incident)))
             {
                 if (!existing.Add((incident.Id, policy.Id))) continue;
                 db.NotificationDeliveryStates.Add(new NotificationDeliveryState
@@ -141,6 +146,24 @@ static class NotificationPlanner
                     IncidentId = incident.Id,
                     NotificationPolicyId = policy.Id,
                     NextAttemptAt = now
+                });
+            }
+            foreach (var policy in inAppPolicies.Where(policy => Matches(policy, incident)))
+            foreach (var recipient in recipients)
+            {
+                if (!inAppExisting.Add((incident.Id, policy.Id, recipient.Id))) continue;
+                var hostName = incident.Host?.Name ?? "未知主机";
+                db.InAppNotifications.Add(new InAppNotification
+                {
+                    IncidentId = incident.Id,
+                    NotificationPolicyId = policy.Id,
+                    UserId = recipient.Id,
+                    PolicyName = policy.Name,
+                    HostName = hostName,
+                    Title = $"{hostName}: {incident.Title}",
+                    Content = $"{incident.Severity}告警，信号：{incident.Signal}，当前值：{incident.Value}。",
+                    Severity = incident.Severity,
+                    CreatedAt = now
                 });
             }
         }

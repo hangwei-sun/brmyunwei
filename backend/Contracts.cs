@@ -1,4 +1,5 @@
 static class IncidentState { public const string Open = "未确认"; public const string Acknowledged = "已确认"; public const string Silenced = "已静默"; public const string Maintenance = "维护中"; }
+static class NotificationChannel { public const string Sms = "sms"; public const string InApp = "inApp"; public static readonly HashSet<string> All = [Sms, InApp]; }
 static class ProbeType { public const string Icmp = "icmp"; public const string Tcp = "tcp"; public const string Http = "http"; public static readonly HashSet<string> All = [Icmp, Tcp, Http]; }
 static class ProbeStatus { public const string Unknown = "未知"; public const string Healthy = "健康"; public const string Failing = "故障"; }
 sealed record LoginRequest(string? Username, string? Password);
@@ -7,7 +8,7 @@ sealed record UpdateUserRequest(string? Role, bool Enabled, string? Password);
 sealed record UserDto(string Username, string Role, bool Enabled, DateTimeOffset? LastLoginAt, DateTimeOffset CreatedAt);
 sealed record IncidentActionRequest(string? Note);
 sealed record AlertRuleUpdate(bool Enabled, double WarningThreshold, double CriticalThreshold, int TriggerCount = 1, int RecoveryCount = 2);
-sealed record NotificationPolicyRequest(string Name, string ServerGroup, string Severity, string ContactGroup, bool Enabled, int RepeatMinutes);
+sealed record NotificationPolicyRequest(string Name, string ServerGroup, string Severity, string ContactGroup, bool Enabled, int RepeatMinutes, string? Channel = null);
 sealed record NotificationDeliveryResolutionRequest(string Action);
 sealed record SmsTestRequest(string[] PhoneNumbers, string[] TemplateParameters);
 sealed record HostRequest(string Name, string Ip, string Room, string Service, string? Group = null);
@@ -27,6 +28,10 @@ sealed record HostDto(string Id, string Ip, string Room, string Service, string 
 }
 sealed record HostServiceStatusDto(string Name, string Status, DateTimeOffset UpdatedAt);
 sealed record NotificationDeliveryDto(Guid IncidentId, int PolicyId, string Status, int Attempts, DateTimeOffset? LastAttemptAt, DateTimeOffset? LastSentAt, DateTimeOffset NextAttemptAt, string? LastError);
+sealed record InAppNotificationDto(long Id, Guid IncidentId, int PolicyId, string PolicyName, string HostName, string Title, string Content, string Severity, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt)
+{
+    public static InAppNotificationDto From(InAppNotification item) => new(item.Id, item.IncidentId, item.NotificationPolicyId, item.PolicyName, item.HostName, item.Title, item.Content, item.Severity, item.CreatedAt, item.ReadAt);
+}
 sealed record IncidentDto(Guid Id, string Host, string Ip, string Title, string Severity, string Started, string Duration, string Signal, string Value, string State)
 {
     public static IncidentDto From(Incident incident) => new(incident.Id, incident.Host?.Name ?? "未知", incident.Host?.Ip ?? "-", incident.Title, incident.Severity, incident.StartedAt.ToLocalTime().ToString("HH:mm:ss"), $"{Math.Max(1, (int)(DateTimeOffset.UtcNow - incident.StartedAt).TotalMinutes)} 分钟", incident.Signal, incident.Value, incident.State);
@@ -51,6 +56,7 @@ static class Validation
         if (string.IsNullOrWhiteSpace(request.ServerGroup) || request.ServerGroup.Trim().Length > 64) return "服务器组为必填项，且不得超过 64 个字符。";
         if (request.Severity is not ("严重" or "警告")) return "严重级别必须为严重或警告。";
         if (string.IsNullOrWhiteSpace(request.ContactGroup) || request.ContactGroup.Trim().Length > 64) return "联系人组为必填项，且不得超过 64 个字符。";
+        if (request.Channel is not null && !NotificationChannel.All.Contains(request.Channel.Trim())) return "通知通道必须为 sms 或 inApp。";
         if (request.RepeatMinutes is < 5 or > 1440) return "重复提醒间隔必须在 5 到 1440 分钟之间。";
         return null;
     }

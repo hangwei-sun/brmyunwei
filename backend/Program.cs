@@ -296,6 +296,23 @@ read.MapGet("/notification-policies", async (MonitoringDbContext db) => Results.
 read.MapGet("/notification-deliveries", async (MonitoringDbContext db) => Results.Ok(await db.NotificationDeliveryStates
     .OrderByDescending(item => item.LastAttemptAt).Take(200)
     .Select(item => new NotificationDeliveryDto(item.IncidentId, item.NotificationPolicyId, item.Status, item.Attempts, item.LastAttemptAt, item.LastSentAt, item.NextAttemptAt, item.LastError)).ToListAsync()));
+read.MapGet("/in-app-notifications", async (bool? unreadOnly, int? take, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var userId = SecurityPrincipal.UserId(principal);
+    if (userId is null) return Results.Unauthorized();
+    var limit = Math.Clamp(take ?? 100, 1, 200);
+    var query = db.InAppNotifications.Where(item => item.UserId == userId.Value);
+    if (unreadOnly == true) query = query.Where(item => item.ReadAt == null);
+    // SQLite cannot order DateTimeOffset directly; the monotonic primary key is creation order here.
+    var items = await query.OrderByDescending(item => item.Id).Take(limit).ToListAsync();
+    return Results.Ok(items.Select(InAppNotificationDto.From));
+});
+read.MapGet("/in-app-notifications/unread-count", async (ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var userId = SecurityPrincipal.UserId(principal);
+    if (userId is null) return Results.Unauthorized();
+    return Results.Ok(new { count = await db.InAppNotifications.CountAsync(item => item.UserId == userId.Value && item.ReadAt == null) });
+});
 read.MapGet("/probes", async (MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).OrderBy(probe => probe.Host!.Name).ThenBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/hosts/{name}/probes", async (string name, MonitoringDbContext db) => Results.Ok((await db.ProbeDefinitions.Include(probe => probe.Host).Where(probe => probe.Host!.Name == name.ToUpperInvariant()).OrderBy(probe => probe.Name).ToListAsync()).Select(ProbeDto.From)));
 read.MapGet("/ha", (HaLeaseState haLease) => Results.Ok(haLease.Status(DateTimeOffset.UtcNow)));
@@ -319,6 +336,34 @@ operations.MapPost("/incidents/{id:guid}/silence", async (Guid id, IncidentActio
     await IncidentOperations.UpdateAsync(id, IncidentState.Silenced, "临时静默", request.Note, principal, db));
 operations.MapPost("/incidents/{id:guid}/maintenance", async (Guid id, IncidentActionRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
     await IncidentOperations.UpdateAsync(id, IncidentState.Maintenance, "进入维护", request.Note, principal, db));
+operations.MapPost("/in-app-notifications/{id:long}/read", async (long id, ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var userId = SecurityPrincipal.UserId(principal);
+    if (userId is null) return Results.Unauthorized();
+    var notification = await db.InAppNotifications.SingleOrDefaultAsync(item => item.Id == id && item.UserId == userId.Value);
+    if (notification is null) return Results.NotFound();
+    if (notification.ReadAt is null)
+    {
+        notification.ReadAt = DateTimeOffset.UtcNow;
+        await Audit.AddAsync(db, principal, "阅读站内通知", $"notification={notification.Id}");
+        await db.SaveChangesAsync();
+    }
+    return Results.Ok(InAppNotificationDto.From(notification));
+});
+operations.MapPost("/in-app-notifications/read-all", async (ClaimsPrincipal principal, MonitoringDbContext db) =>
+{
+    var userId = SecurityPrincipal.UserId(principal);
+    if (userId is null) return Results.Unauthorized();
+    var unread = await db.InAppNotifications.Where(item => item.UserId == userId.Value && item.ReadAt == null).ToListAsync();
+    if (unread.Count > 0)
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var notification in unread) notification.ReadAt = now;
+        await Audit.AddAsync(db, principal, "全部阅读站内通知", $"count={unread.Count}");
+        await db.SaveChangesAsync();
+    }
+    return Results.Ok(new { markedRead = unread.Count });
+});
 operations.MapPost("/notification-deliveries/{incidentId:guid}/{policyId:int}/resolve", async (Guid incidentId, int policyId, NotificationDeliveryResolutionRequest request, ClaimsPrincipal principal, MonitoringDbContext db) =>
 {
     var state = await db.NotificationDeliveryStates.FindAsync(incidentId, policyId);
@@ -532,7 +577,8 @@ administration.MapPost("/notification-policies", async (NotificationPolicyReques
 {
     var error = Validation.ValidateNotificationPolicy(request);
     if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["policy"] = [error] });
-    var policy = new NotificationPolicy { Name = request.Name.Trim(), ServerGroup = request.ServerGroup.Trim(), Severity = request.Severity, ContactGroup = request.ContactGroup.Trim(), Enabled = request.Enabled, RepeatMinutes = request.RepeatMinutes, UpdatedAt = DateTimeOffset.UtcNow };
+    var channel = request.Channel?.Trim() ?? NotificationChannel.Sms;
+    var policy = new NotificationPolicy { Name = request.Name.Trim(), ServerGroup = request.ServerGroup.Trim(), Severity = request.Severity, ContactGroup = request.ContactGroup.Trim(), Channel = channel, Enabled = request.Enabled, RepeatMinutes = request.RepeatMinutes, UpdatedAt = DateTimeOffset.UtcNow };
     db.NotificationPolicies.Add(policy);
     await Audit.AddAsync(db, principal, "创建通知策略", policy.Name);
     await db.SaveChangesAsync();
@@ -544,7 +590,7 @@ administration.MapPut("/notification-policies/{id:int}", async (int id, Notifica
     if (error is not null) return Results.ValidationProblem(new Dictionary<string, string[]> { ["policy"] = [error] });
     var policy = await db.NotificationPolicies.FindAsync(id);
     if (policy is null) return Results.NotFound();
-    policy.Name = request.Name.Trim(); policy.ServerGroup = request.ServerGroup.Trim(); policy.Severity = request.Severity; policy.ContactGroup = request.ContactGroup.Trim(); policy.Enabled = request.Enabled; policy.RepeatMinutes = request.RepeatMinutes; policy.UpdatedAt = DateTimeOffset.UtcNow;
+    policy.Name = request.Name.Trim(); policy.ServerGroup = request.ServerGroup.Trim(); policy.Severity = request.Severity; policy.ContactGroup = request.ContactGroup.Trim(); policy.Channel = request.Channel?.Trim() ?? policy.Channel; policy.Enabled = request.Enabled; policy.RepeatMinutes = request.RepeatMinutes; policy.UpdatedAt = DateTimeOffset.UtcNow;
     await Audit.AddAsync(db, principal, "更新通知策略", policy.Name);
     await db.SaveChangesAsync();
     return Results.Ok(policy);

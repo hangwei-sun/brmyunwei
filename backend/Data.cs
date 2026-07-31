@@ -20,6 +20,7 @@ sealed class MonitoringDbContext(
     public DbSet<HostServiceStatus> HostServiceStatuses => Set<HostServiceStatus>();
     public DbSet<MetricRuleState> MetricRuleStates => Set<MetricRuleState>();
     public DbSet<NotificationDeliveryState> NotificationDeliveryStates => Set<NotificationDeliveryState>();
+    public DbSet<InAppNotification> InAppNotifications => Set<InAppNotification>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
@@ -47,6 +48,10 @@ sealed class MonitoringDbContext(
         modelBuilder.Entity<NotificationDeliveryState>().HasKey(item => new { item.IncidentId, item.NotificationPolicyId });
         modelBuilder.Entity<NotificationDeliveryState>().HasOne<Incident>().WithMany().HasForeignKey(item => item.IncidentId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<NotificationDeliveryState>().HasOne<NotificationPolicy>().WithMany().HasForeignKey(item => item.NotificationPolicyId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<InAppNotification>().HasIndex(item => new { item.IncidentId, item.NotificationPolicyId, item.UserId }).IsUnique();
+        modelBuilder.Entity<InAppNotification>().HasIndex(item => new { item.UserId, item.ReadAt, item.CreatedAt });
+        modelBuilder.Entity<InAppNotification>().HasOne<Incident>().WithMany().HasForeignKey(item => item.IncidentId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<InAppNotification>().HasOne<LocalUser>().WithMany().HasForeignKey(item => item.UserId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -54,7 +59,7 @@ sealed class Host { public int Id { get; set; } public required string Name { ge
 sealed class Incident { public Guid Id { get; set; } = Guid.NewGuid(); public int HostId { get; set; } public Host? Host { get; set; } public required string Title { get; set; } public required string Severity { get; set; } public required string Signal { get; set; } public required string Value { get; set; } public string Fingerprint { get; set; } = ""; public string State { get; set; } = IncidentState.Open; public DateTimeOffset StartedAt { get; set; } public DateTimeOffset UpdatedAt { get; set; } public DateTimeOffset? ResolvedAt { get; set; } public string? Note { get; set; } }
 sealed class MetricSample { public long Id { get; set; } public int HostId { get; set; } public DateTimeOffset CollectedAt { get; set; } public double Cpu { get; set; } public double Memory { get; set; } public double Disk { get; set; } public double Latency { get; set; } }
 sealed class AlertRule { public int Id { get; set; } public required string Name { get; set; } public required string CheckItem { get; set; } public required string Severity { get; set; } public bool Enabled { get; set; } public double WarningThreshold { get; set; } public double CriticalThreshold { get; set; } public int TriggerCount { get; set; } = 1; public int RecoveryCount { get; set; } = 2; public DateTimeOffset UpdatedAt { get; set; } }
-sealed class NotificationPolicy { public int Id { get; set; } public required string Name { get; set; } public required string ServerGroup { get; set; } public required string Severity { get; set; } public required string ContactGroup { get; set; } public bool Enabled { get; set; } public int RepeatMinutes { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
+sealed class NotificationPolicy { public int Id { get; set; } public required string Name { get; set; } public required string ServerGroup { get; set; } public required string Severity { get; set; } public required string ContactGroup { get; set; } public string Channel { get; set; } = NotificationChannel.Sms; public bool Enabled { get; set; } public int RepeatMinutes { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class AuditLog { public long Id { get; set; } public required string Actor { get; set; } public required string Action { get; set; } public required string Detail { get; set; } public DateTimeOffset CreatedAt { get; set; } }
 sealed class LocalUser { public int Id { get; set; } public required string UserName { get; set; } public required string NormalizedUserName { get; set; } public required string PasswordHash { get; set; } public required string Role { get; set; } public required string SecurityStamp { get; set; } public bool Enabled { get; set; } public int FailedLoginCount { get; set; } public DateTimeOffset? LockoutEnd { get; set; } public DateTimeOffset? LastLoginAt { get; set; } public DateTimeOffset CreatedAt { get; set; } public static string Normalize(string value) => value.Trim().ToUpperInvariant(); }
 sealed class AgentCredential { public int HostId { get; set; } public required string KeyHash { get; set; } public bool RequireCertificate { get; set; } public string? CertificateSha256 { get; set; } public DateTimeOffset? CertificateNotAfter { get; set; } public string? PreviousCertificateSha256 { get; set; } public DateTimeOffset? PreviousCertificateValidUntil { get; set; } public DateTimeOffset RotatedAt { get; set; } }
@@ -89,6 +94,7 @@ sealed class ProbeDefinition
 sealed class HostServiceStatus { public int HostId { get; set; } public required string Name { get; set; } public required string Status { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class MetricRuleState { public int HostId { get; set; } public int AlertRuleId { get; set; } public int ConsecutiveFailures { get; set; } public int ConsecutiveSuccesses { get; set; } public bool Firing { get; set; } public DateTimeOffset UpdatedAt { get; set; } }
 sealed class NotificationDeliveryState { public Guid IncidentId { get; set; } public int NotificationPolicyId { get; set; } public string Status { get; set; } = "待发送"; public int Attempts { get; set; } public DateTimeOffset? LastAttemptAt { get; set; } public DateTimeOffset? LastSentAt { get; set; } public DateTimeOffset NextAttemptAt { get; set; } public string? RequestId { get; set; } public string? LastError { get; set; } }
+sealed class InAppNotification { public long Id { get; set; } public Guid IncidentId { get; set; } public int NotificationPolicyId { get; set; } public int UserId { get; set; } public required string Title { get; set; } public required string Content { get; set; } public required string Severity { get; set; } public required string HostName { get; set; } public required string PolicyName { get; set; } public DateTimeOffset CreatedAt { get; set; } public DateTimeOffset? ReadAt { get; set; } }
 sealed class SystemSettings
 {
     public int Id { get; set; }
@@ -232,6 +238,18 @@ static class SecuritySchema
             CREATE INDEX IF NOT EXISTS "IX_MetricRuleStates_AlertRuleId" ON "MetricRuleStates" ("AlertRuleId");
             CREATE INDEX IF NOT EXISTS "IX_NotificationDeliveryStates_NotificationPolicyId" ON "NotificationDeliveryStates" ("NotificationPolicyId");
             """);
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "InAppNotifications" (
+              "Id" INTEGER NOT NULL CONSTRAINT "PK_InAppNotifications" PRIMARY KEY AUTOINCREMENT,
+              "IncidentId" TEXT NOT NULL, "NotificationPolicyId" INTEGER NOT NULL, "UserId" INTEGER NOT NULL,
+              "Title" TEXT NOT NULL, "Content" TEXT NOT NULL, "Severity" TEXT NOT NULL, "HostName" TEXT NOT NULL, "PolicyName" TEXT NOT NULL,
+              "CreatedAt" TEXT NOT NULL, "ReadAt" TEXT NULL,
+              CONSTRAINT "FK_InAppNotifications_Incidents_IncidentId" FOREIGN KEY ("IncidentId") REFERENCES "Incidents" ("Id") ON DELETE CASCADE,
+              CONSTRAINT "FK_InAppNotifications_LocalUsers_UserId" FOREIGN KEY ("UserId") REFERENCES "LocalUsers" ("Id") ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_InAppNotifications_IncidentId_NotificationPolicyId_UserId" ON "InAppNotifications" ("IncidentId", "NotificationPolicyId", "UserId");
+            CREATE INDEX IF NOT EXISTS "IX_InAppNotifications_UserId_ReadAt_CreatedAt" ON "InAppNotifications" ("UserId", "ReadAt", "CreatedAt");
+            """);
     }
 
     private static async Task EnsureIncidentColumnsAsync(MonitoringDbContext db)
@@ -272,6 +290,8 @@ static class SecuritySchema
         if (!ruleColumns.Contains("TriggerCount")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AlertRules\" ADD COLUMN \"TriggerCount\" INTEGER NOT NULL DEFAULT 1;");
         if (!ruleColumns.Contains("RecoveryCount")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"AlertRules\" ADD COLUMN \"RecoveryCount\" INTEGER NOT NULL DEFAULT 2;");
         await db.Database.ExecuteSqlRawAsync("UPDATE \"AlertRules\" SET \"TriggerCount\" = 5 WHERE \"CheckItem\" = 'CPU 使用率' AND \"TriggerCount\" = 1;");
+        var policyColumns = await ColumnsAsync(db, "NotificationPolicies");
+        if (!policyColumns.Contains("Channel")) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"NotificationPolicies\" ADD COLUMN \"Channel\" TEXT NOT NULL DEFAULT 'sms';");
     }
 
     private static async Task<HashSet<string>> ColumnsAsync(MonitoringDbContext db, string table)
@@ -319,7 +339,12 @@ static class SeedData
             db.AlertRules.AddRange(new[] { new AlertRule { Name = "CPU 使用率 >90% 持续 5 分钟", CheckItem = "CPU 使用率", Severity = "严重", Enabled = true, WarningThreshold = 85, CriticalThreshold = 90, TriggerCount = 5, RecoveryCount = 2, UpdatedAt = now }, new AlertRule { Name = "磁盘可用空间 <8%（严重）", CheckItem = "磁盘可用空间", Severity = "严重", Enabled = true, WarningThreshold = 15, CriticalThreshold = 8, TriggerCount = 1, RecoveryCount = 2, UpdatedAt = now } });
             await db.SaveChangesAsync();
         }
-        if (!includeDemoData || await db.Hosts.AnyAsync()) return;
+        if (!includeDemoData) return;
+        if (await db.Hosts.AnyAsync())
+        {
+            await EnsureDevelopmentInAppPolicyAsync(db, now);
+            return;
+        }
         var hosts = new[]
         {
             Host("WEB-01", "10.10.1.11", "WEB", "健康", 23, 45, 38, 12), Host("WEB-02", "10.10.1.12", "WEB", "健康", 19, 41, 35, 11), Host("APP-01", "10.10.2.21", "APP", "健康", 34, 57, 42, 14), Host("APP-02", "10.10.2.22", "APP", "健康", 28, 53, 47, 12), Host("APP-07", "10.10.2.27", "APP", "性能降级", 91, 62, 58, 14), Host("DB-02", "10.10.3.12", "数据库", "业务异常", 44, 68, 93, 15), Host("DB-03", "10.10.3.13", "数据库", "健康", 26, 49, 41, 16), Host("ERP-01", "10.10.4.11", "ERP", "确认离线", null, null, null, null), Host("CACHE-01", "10.10.5.11", "缓存", "维护中", 12, 38, 28, 12), Host("MQ-01", "10.10.5.21", "中间件", "健康", 17, 38, 33, 12),
@@ -329,9 +354,28 @@ static class SeedData
         var lookup = hosts.ToDictionary(host => host.Name);
         db.Incidents.AddRange(
             Incident(lookup["DB-02"], "磁盘空间不足 (93%)", "严重", "磁盘使用率", "93%", 2), Incident(lookup["APP-07"], "CPU 使用率过高 (91%)", "警告", "CPU 使用率", "91%", 3), Incident(lookup["APP-01"], "内存使用率过高 (86%)", "警告", "内存使用率", "86%", 5), Incident(lookup["ERP-01"], "主机确认离线", "严重", "代理、ICMP、业务探针", "失联", 7));
-        db.NotificationPolicies.Add(new NotificationPolicy { Name = "生产严重告警短信", ServerGroup = "生产服务器组", Severity = "严重", ContactGroup = "一线运维值班组", Enabled = true, RepeatMinutes = 15, UpdatedAt = now });
+        db.NotificationPolicies.AddRange(
+            new NotificationPolicy { Name = "生产严重告警短信", ServerGroup = "生产服务器组", Severity = "严重", ContactGroup = "一线运维值班组", Channel = NotificationChannel.Sms, Enabled = true, RepeatMinutes = 15, UpdatedAt = now },
+            new NotificationPolicy { Name = "生产严重告警站内信", ServerGroup = "生产服务器组", Severity = "严重", ContactGroup = "本地运维人员", Channel = NotificationChannel.InApp, Enabled = true, RepeatMinutes = 15, UpdatedAt = now });
         foreach (var host in hosts.Where(host => host.Cpu.HasValue)) for (var i = 0; i < 24; i++) db.MetricSamples.Add(new MetricSample { HostId = host.Id, CollectedAt = now.AddHours(-24 + i), Cpu = host.Cpu!.Value + Math.Sin(i) * 4, Memory = host.Memory!.Value + Math.Cos(i) * 3, Disk = host.Disk!.Value, Latency = host.Latency!.Value + Math.Abs(Math.Sin(i)) * 2 });
         db.AuditLogs.Add(new AuditLog { Action = "初始化系统", Detail = "已创建本地中心端示例数据", Actor = "system", CreatedAt = now });
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task EnsureDevelopmentInAppPolicyAsync(MonitoringDbContext db, DateTimeOffset now)
+    {
+        if (await db.NotificationPolicies.AnyAsync(item => item.Channel == NotificationChannel.InApp)) return;
+        db.NotificationPolicies.Add(new NotificationPolicy
+        {
+            Name = "生产严重告警站内信",
+            ServerGroup = "生产服务器组",
+            Severity = "严重",
+            ContactGroup = "本地运维人员",
+            Channel = NotificationChannel.InApp,
+            Enabled = true,
+            RepeatMinutes = 15,
+            UpdatedAt = now
+        });
         await db.SaveChangesAsync();
     }
     private static Host Host(string name, string ip, string service, string status, double? cpu, double? memory, double? disk, double? latency) => new() { Name = name, Ip = ip, Room = "生产机房 A", Service = service, Group = "生产服务器组", Status = status, Cpu = cpu, Memory = memory, Disk = disk, Latency = latency, LastHeartbeatAt = DateTimeOffset.UtcNow.AddSeconds(-6) };

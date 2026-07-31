@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import {
   clearAccessToken, createNotificationPolicy, createUser, deleteNotificationPolicy, getAccessToken, getCurrentUser, getDashboard,
-  getNotificationPolicies, getRules, getServerGroups, getSystemSettings, getUsers, login, requestJson,
+  getInAppNotifications, getNotificationPolicies, getRules, getServerGroups, getSystemSettings, getUsers, login, markAllInAppNotificationsRead, markInAppNotificationRead, requestJson,
   sendTestSms, updateSystemSettings,
   updateNotificationPolicy, updateRule, updateUser,
 } from "./api.js";
@@ -51,15 +51,52 @@ function LoginScreen({ onLogin }) {
   return <main className="login-page"><section className="login-panel"><div className="login-brand"><Activity size={26} /><div><h1>机房运维监控</h1><p>使用运维账号登录中心端</p></div></div><form onSubmit={submit}><label>账号<input autoFocus autoComplete="username" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label><label>密码<input type="password" autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>{state.error && <div className="login-error" role="alert"><AlertTriangle size={16} />{state.error}</div>}<button className="primary-button login-submit" disabled={state.submitting || !form.username || !form.password}><LockKeyhole size={16} />{state.submitting ? "正在登录…" : "登录"}</button></form></section></main>;
 }
 
-function AppShell({ active, setActive, children, incidentCount, ha, dataStatus, user, onLogout, siteName }) {
+function AppShell({ active, setActive, children, incidentCount, notificationCount, notificationsOpen, onToggleNotifications, onCloseNotifications, onNotificationsChanged, ha, dataStatus, user, onLogout, siteName }) {
   const [collapsed, setCollapsed] = useState(false);
   const navItems = isAdmin(user) ? [...baseNavItems, ["设置", Settings2], ["用户", Users]] : baseNavItems;
-  return <div className={`app-shell ${collapsed ? "collapsed" : ""}`}><aside className="sidebar"><div className="brand"><Activity size={23} /><span>{siteName || "机房运维监控"}</span></div><nav>{navItems.map(([label, Icon]) => <button key={label} className={active === label ? "nav-active" : ""} onClick={() => setActive(label)}><Icon size={19} /><span>{label}</span>{label === "事件" && incidentCount > 0 && <b className="nav-badge">{incidentCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span><StatusDot status="健康" /><span>{user.username}</span></span><button onClick={() => setCollapsed(!collapsed)} title="收起侧栏"><ChevronLeft size={18} /></button></div></aside><section className="workspace"><header className="topbar"><button className="icon-button mobile-menu"><Menu size={20} /></button><div className="room-select"><Database size={17} /> {siteName || "生产机房"} <ChevronDown size={15} /></div><div className="global-search" aria-label="全局搜索"><Search size={18} /><span>使用页面内筛选查找资产和事件</span></div><div className="topbar-status"><span><RefreshCw className={dataStatus === "loading" ? "spin" : ""} size={15} /> {dataStatus === "ready" ? "数据已同步" : dataStatus === "loading" ? "正在同步" : "中心端连接异常"}</span><span className="node-active"><StatusDot status="正常" />{ha?.mode === "single-node" ? "单节点模式" : ha?.mode || "中心端状态未知"}</span></div><button className="icon-button notification" aria-label="事件"><Bell size={19} />{incidentCount > 0 && <i>{incidentCount}</i>}</button><span className="user"><Users size={19} /> {user.username} · {roleLabels[user.role] || user.role}</span><button className="icon-button" onClick={onLogout} title="退出登录"><LogOut size={17} /></button></header><main className="page">{children}</main></section></div>;
+  return <div className={`app-shell ${collapsed ? "collapsed" : ""}`}><aside className="sidebar"><div className="brand"><Activity size={23} /><span>{siteName || "机房运维监控"}</span></div><nav>{navItems.map(([label, Icon]) => <button key={label} className={active === label ? "nav-active" : ""} onClick={() => setActive(label)}><Icon size={19} /><span>{label}</span>{label === "事件" && incidentCount > 0 && <b className="nav-badge">{incidentCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span><StatusDot status="健康" /><span>{user.username}</span></span><button onClick={() => setCollapsed(!collapsed)} title="收起侧栏"><ChevronLeft size={18} /></button></div></aside><section className="workspace"><header className="topbar"><button className="icon-button mobile-menu"><Menu size={20} /></button><div className="room-select"><Database size={17} /> {siteName || "生产机房"} <ChevronDown size={15} /></div><div className="global-search" aria-label="全局搜索"><Search size={18} /><span>使用页面内筛选查找资产和事件</span></div><div className="topbar-status"><span><RefreshCw className={dataStatus === "loading" ? "spin" : ""} size={15} /> {dataStatus === "ready" ? "数据已同步" : dataStatus === "loading" ? "正在同步" : "中心端连接异常"}</span><span className="node-active"><StatusDot status="正常" />{ha?.mode === "single-node" ? "单节点模式" : ha?.mode || "中心端状态未知"}</span></div><button className="icon-button notification" aria-label="打开站内信" aria-haspopup="dialog" aria-expanded={notificationsOpen} onClick={onToggleNotifications}><Bell size={19} />{notificationCount > 0 && <i>{notificationCount > 99 ? "99+" : notificationCount}</i>}</button><span className="user"><Users size={19} /> {user.username} · {roleLabels[user.role] || user.role}</span><button className="icon-button" onClick={onLogout} title="退出登录"><LogOut size={17} /></button></header><main className="page">{children}</main>{notificationsOpen && <NotificationCenter onClose={onCloseNotifications} onChanged={onNotificationsChanged} />}</section></div>;
 }
 
 function Modal({ title, description, children, onClose, wide = false }) {
   useEffect(() => { const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", closeOnEscape); return () => window.removeEventListener("keydown", closeOnEscape); }, [onClose]);
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className={`modal ${wide ? "modal-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><h2>{title}</h2>{description && <p>{description}</p>}</div><button type="button" className="icon-button" onClick={onClose} aria-label="关闭"><X /></button></div>{children}</section></div>;
+}
+
+function notificationItems(payload) { return Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : []; }
+
+function NotificationCenter({ onClose, onChanged }) {
+  const [tab, setTab] = useState("unread");
+  const [items, setItems] = useState([]);
+  const [state, setState] = useState({ status: "loading", error: "" });
+  const load = useCallback(async () => {
+    setState({ status: "loading", error: "" });
+    try {
+      setItems(notificationItems(await getInAppNotifications(tab === "unread")));
+      setState({ status: "ready", error: "" });
+    } catch (error) { setState({ status: "error", error: error.message }); }
+  }, [tab]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  const markRead = async (item) => {
+    if (item.readAt) return;
+    try {
+      await markInAppNotificationRead(item.id);
+      setItems((current) => tab === "unread" ? current.filter((entry) => entry.id !== item.id) : current.map((entry) => entry.id === item.id ? { ...entry, readAt: new Date().toISOString() } : entry));
+      onChanged();
+    } catch (error) { setState({ status: "error", error: error.message }); }
+  };
+  const markAllRead = async () => {
+    try {
+      await markAllInAppNotificationsRead();
+      setItems((current) => tab === "unread" ? [] : current.map((item) => ({ ...item, readAt: new Date().toISOString() })));
+      onChanged();
+    } catch (error) { setState({ status: "error", error: error.message }); }
+  };
+  return <div className="notification-backdrop" onMouseDown={onClose}><section className="notification-center" role="dialog" aria-modal="true" aria-label="站内信" onMouseDown={(event) => event.stopPropagation()}><div className="notification-heading"><div><h2>站内信</h2><p>告警事件会按通知策略发送到当前账号。</p></div><button className="icon-button" onClick={onClose} aria-label="关闭站内信"><X size={17} /></button></div><div className="notification-toolbar"><div className="notification-tabs" role="tablist" aria-label="站内信筛选"><button role="tab" aria-selected={tab === "unread"} className={tab === "unread" ? "selected" : ""} onClick={() => setTab("unread")}>未读</button><button role="tab" aria-selected={tab === "all"} className={tab === "all" ? "selected" : ""} onClick={() => setTab("all")}>全部</button></div><button className="text-button" disabled={items.length === 0} onClick={markAllRead}>全部标为已读</button></div>{state.status === "loading" ? <PageState kind="loading" compact message="正在加载站内信…" /> : state.status === "error" ? <PageState kind="error" compact message={state.error} onRetry={load} /> : items.length === 0 ? <PageState kind="empty" compact message={tab === "unread" ? "没有未读站内信。" : "暂时没有站内信。"} /> : <div className="notification-list">{items.map((item) => <button className={`notification-item ${item.readAt ? "is-read" : ""}`} key={item.id} onClick={() => markRead(item)} title={item.readAt ? "已读" : "点击标为已读"}><Severity value={item.severity || "警告"} /><span><strong>{item.title}</strong><small>{[item.hostName, item.policyName].filter(Boolean).join(" / ")}</small><p>{item.content}</p><time>{formatTime(item.createdAt)}</time></span>{!item.readAt && <i aria-label="未读" />}</button>)}</div>}</section></div>;
 }
 
 function Overview({ hosts, incidents, onOpenIncident, onOpenHost, setActive, dataState, onRetry }) {
@@ -109,20 +146,37 @@ function RuleDrawer({ rule, onClose, onSave }) {
 }
 
 function NotificationPage({ user }) {
-  const [policies, setPolicies] = useState([]); const [groups, setGroups] = useState([]); const [state, setState] = useState({ status: "loading", error: "" }); const [editing, setEditing] = useState(null);
+  const [policies, setPolicies] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [state, setState] = useState({ status: "loading", error: "" });
+  const [editing, setEditing] = useState(null);
   const load = useCallback(async () => { setState({ status: "loading", error: "" }); try { const [loadedPolicies, loadedGroups] = await Promise.all([getNotificationPolicies(), getServerGroups()]); setPolicies(loadedPolicies); setGroups(loadedGroups); setState({ status: "ready", error: "" }); } catch (error) { setState({ status: "error", error: error.message }); } }, []);
   useEffect(() => { load(); }, [load]);
   const save = async (policy) => { const saved = policy.isNew ? await createNotificationPolicy(policy) : await updateNotificationPolicy(policy.id, policy); setPolicies((current) => policy.isNew ? [...current, saved] : current.map((item) => item.id === saved.id ? saved : item)); setEditing(null); };
   const remove = async (policy) => { if (!window.confirm(`确定删除通知策略 ${policy.name} 吗？`)) return; await deleteNotificationPolicy(policy.id); setPolicies((current) => current.filter((item) => item.id !== policy.id)); };
   if (state.status === "loading") return <PageState kind="loading" message="正在加载通知策略…" />;
   if (state.status === "error") return <PageState kind="error" message={state.error} onRetry={load} />;
-  return <><div className="page-title"><div><h1>通知策略</h1><p>按服务器组和严重级别决定哪些设备触发通知。</p></div>{isAdmin(user) && <button className="primary-button" onClick={() => setEditing({ isNew: true, name: "", serverGroup: groups[0]?.name || "默认组", severity: "严重", contactGroup: "", enabled: true, repeatMinutes: 15 })}><Plus size={16} />添加策略</button>}</div><div className="rules-layout"><section><div className="table-wrap"><table><thead><tr><th>策略名称</th><th>适用服务器组</th><th>严重级别</th><th>通知对象</th><th>重复提醒</th><th>状态</th><th>更新时间</th>{isAdmin(user) && <th>操作</th>}</tr></thead><tbody>{policies.map((policy) => <tr key={policy.id}><td>{policy.name}</td><td>{policy.serverGroup}</td><td><Severity value={policy.severity} /></td><td>{policy.contactGroup}</td><td>{policy.repeatMinutes} 分钟</td><td><span className={policy.enabled ? "tag-enabled" : "tag-disabled"}>{policy.enabled ? "启用" : "停用"}</span></td><td>{formatTime(policy.updatedAt)}</td>{isAdmin(user) && <td><button className="text-button" onClick={() => setEditing(policy)}><Pencil size={14} />编辑</button><button className="text-button destructive" onClick={() => remove(policy)}><Trash2 size={14} />删除</button></td>}</tr>)}</tbody></table>{policies.length === 0 && <PageState kind="empty" compact message="中心端尚未配置通知策略。" />}</div></section></div>{editing && <NotificationDrawer policy={editing} groups={groups} onClose={() => setEditing(null)} onSave={save} />}</>;
+  return <>
+    <div className="page-title"><div><h1>通知策略</h1><p>按服务器组和严重级别决定短信或本地站内信的投递范围。</p></div>{isAdmin(user) && <button className="primary-button" onClick={() => setEditing({ isNew: true, name: "", serverGroup: groups[0]?.name || "默认组", severity: "严重", channel: "sms", contactGroup: "", enabled: true, repeatMinutes: 15 })}><Plus size={16} />添加策略</button>}</div>
+    <div className="rules-layout"><section><div className="table-wrap"><table><thead><tr><th>策略名称</th><th>通道</th><th>适用服务器组</th><th>严重级别</th><th>通知对象</th><th>重复提醒</th><th>状态</th><th>更新时间</th>{isAdmin(user) && <th>操作</th>}</tr></thead><tbody>{policies.map((policy) => {
+      const inApp = policy.channel === "inApp";
+      return <tr key={policy.id}><td>{policy.name}</td><td><span className={inApp ? "tag-enabled" : "tag-disabled"}>{inApp ? "站内信" : "腾讯云短信"}</span></td><td>{policy.serverGroup}</td><td><Severity value={policy.severity} /></td><td>{inApp ? "启用的管理员和运维人员" : policy.contactGroup}</td><td>{inApp ? "首次告警" : `${policy.repeatMinutes} 分钟`}</td><td><span className={policy.enabled ? "tag-enabled" : "tag-disabled"}>{policy.enabled ? "启用" : "停用"}</span></td><td>{formatTime(policy.updatedAt)}</td>{isAdmin(user) && <td><button className="text-button" onClick={() => setEditing(policy)}><Pencil size={14} />编辑</button><button className="text-button destructive" onClick={() => remove(policy)}><Trash2 size={14} />删除</button></td>}</tr>;
+    })}</tbody></table>{policies.length === 0 && <PageState kind="empty" compact message="中心端尚未配置通知策略。" />}</div></section></div>
+    {editing && <NotificationDrawer policy={editing} groups={groups} onClose={() => setEditing(null)} onSave={save} />}
+  </>;
 }
 
 function NotificationDrawer({ policy, groups, onClose, onSave }) {
-  const [form, setForm] = useState({ ...policy }); const [state, setState] = useState({ saving: false, error: "" });
-  const submit = async (event) => { event.preventDefault(); setState({ saving: true, error: "" }); try { await onSave(form); } catch (error) { setState({ saving: false, error: error.message }); } };
-  return <Modal title={policy.isNew ? "添加通知策略" : `编辑通知策略 · ${policy.name}`} description="按服务器组与严重级别匹配；停用后仅影响后续事件。" onClose={onClose}><form className="modal-form" onSubmit={submit}><label>策略名称<input required autoFocus maxLength="80" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>服务器组<select required value={form.serverGroup} onChange={(event) => setForm({ ...form, serverGroup: event.target.value })}>{groups.map((group) => <option value={group.name} key={group.name}>{group.name}（{group.hostCount} 台）</option>)}<option value="全部服务器">全部服务器</option></select></label><div className="modal-grid"><label>严重级别<select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}><option>严重</option><option>警告</option></select></label><label>联系人组<input required maxLength="64" value={form.contactGroup} onChange={(event) => setForm({ ...form, contactGroup: event.target.value })} /></label></div><label className="toggle-field"><span>策略状态</span><button type="button" aria-label="切换通知策略" className={`toggle ${form.enabled ? "on" : ""}`} onClick={() => setForm({ ...form, enabled: !form.enabled })}><i /></button></label><label>重复提醒间隔（分钟）<input required min="5" max="1440" type="number" value={form.repeatMinutes} onChange={(event) => setForm({ ...form, repeatMinutes: event.target.value })} /></label>{state.error && <p className="form-error">{state.error}</p>}<div className="modal-actions"><button className="primary-button" disabled={state.saving}>{state.saving ? "正在保存…" : "保存"}</button><button type="button" className="subtle-button" onClick={onClose}>取消</button></div></form></Modal>;
+  const [form, setForm] = useState({ ...policy, channel: policy.channel || "sms" });
+  const [state, setState] = useState({ saving: false, error: "" });
+  const inApp = form.channel === "inApp";
+  const submit = async (event) => {
+    event.preventDefault();
+    setState({ saving: true, error: "" });
+    try { await onSave({ ...form, contactGroup: inApp ? "本地运维人员" : form.contactGroup }); }
+    catch (error) { setState({ saving: false, error: error.message }); }
+  };
+  return <Modal title={policy.isNew ? "添加通知策略" : `编辑通知策略 · ${policy.name}`} description="按服务器组与严重级别匹配；站内信只在事件首次触发时投递一次。" onClose={onClose}><form className="modal-form" onSubmit={submit}><label>策略名称<input required autoFocus maxLength="80" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>通知通道<select value={form.channel} onChange={(event) => setForm({ ...form, channel: event.target.value, contactGroup: event.target.value === "inApp" ? "本地运维人员" : form.contactGroup })}><option value="sms">腾讯云短信</option><option value="inApp">本地站内信</option></select></label><label>服务器组<select required value={form.serverGroup} onChange={(event) => setForm({ ...form, serverGroup: event.target.value })}>{groups.map((group) => <option value={group.name} key={group.name}>{group.name}（{group.hostCount} 台）</option>)}<option value="全部服务器">全部服务器</option></select></label><div className="modal-grid"><label>严重级别<select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}><option>严重</option><option>警告</option></select></label>{inApp ? <label>站内接收范围<input disabled value="所有启用的管理员和运维人员" /></label> : <label>联系人组<input required maxLength="64" value={form.contactGroup} onChange={(event) => setForm({ ...form, contactGroup: event.target.value })} /></label>}</div><label className="toggle-field"><span>策略状态</span><button type="button" aria-label="切换通知策略" className={`toggle ${form.enabled ? "on" : ""}`} onClick={() => setForm({ ...form, enabled: !form.enabled })}><i /></button></label>{!inApp && <label>重复提醒间隔（分钟）<input required min="5" max="1440" type="number" value={form.repeatMinutes} onChange={(event) => setForm({ ...form, repeatMinutes: event.target.value })} /></label>}{state.error && <p className="form-error">{state.error}</p>}<div className="modal-actions"><button className="primary-button" disabled={state.saving}>{state.saving ? "正在保存…" : "保存"}</button><button type="button" className="subtle-button" onClick={onClose}>取消</button></div></form></Modal>;
 }
 
 function IncidentList({ incidents, onOpenIncident }) { return <><div className="page-title"><div><h1>事件管理</h1><p>查看、确认、静默和追踪中心端运行事件。</p></div></div><div className="table-wrap incident-table"><table><thead><tr><th>状态</th><th>严重级别</th><th>主机</th><th>事件类型</th><th>开始时间</th><th>持续时间</th><th>操作</th></tr></thead><tbody>{incidents.map((item) => <tr key={item.id}><td>{item.state}</td><td><Severity value={item.severity} /></td><td>{item.host}<small>{item.ip}</small></td><td>{item.title}</td><td>{item.started}</td><td>{item.duration}</td><td><button className="text-button" onClick={() => onOpenIncident(item)}>详情</button></td></tr>)}</tbody></table>{incidents.length === 0 && <PageState kind="empty" compact message="当前没有待处理事件。" />}</div></>;
@@ -178,13 +232,15 @@ function SettingsFeedback({ state }) {
 }
 
 export function App() {
-  const [session, setSession] = useState({ status: getAccessToken() ? "checking" : "anonymous", user: null }); const [active, setActive] = useState("总览"); const [hosts, setHosts] = useState([]); const [incidents, setIncidents] = useState([]); const [drawer, setDrawer] = useState(null); const [selectedHost, setSelectedHost] = useState(null); const [ha, setHa] = useState(null); const [dataState, setDataState] = useState({ status: "loading", error: "" }); const [systemSettings, setSystemSettings] = useState(null);
+  const [session, setSession] = useState({ status: getAccessToken() ? "checking" : "anonymous", user: null }); const [active, setActive] = useState("总览"); const [hosts, setHosts] = useState([]); const [incidents, setIncidents] = useState([]); const [drawer, setDrawer] = useState(null); const [selectedHost, setSelectedHost] = useState(null); const [ha, setHa] = useState(null); const [dataState, setDataState] = useState({ status: "loading", error: "" }); const [systemSettings, setSystemSettings] = useState(null); const [notificationCount, setNotificationCount] = useState(0); const [notificationsOpen, setNotificationsOpen] = useState(false);
   const loadDashboard = useCallback(async () => { setDataState({ status: "loading", error: "" }); try { const dashboard = await getDashboard(); setHosts(dashboard.hosts); setIncidents(dashboard.incidents); setHa(dashboard.ha); setDataState({ status: "ready", error: "" }); } catch (error) { setDataState({ status: "error", error: error.message }); } }, []);
   useEffect(() => { if (session.status !== "checking") return; getCurrentUser().then((user) => setSession({ status: "authenticated", user })).catch(() => { clearAccessToken(); setSession({ status: "anonymous", user: null }); }); }, [session.status]);
   useEffect(() => { if (session.status === "authenticated") loadDashboard(); }, [loadDashboard, session.status]);
+  const refreshNotificationCount = useCallback(async () => { try { setNotificationCount(notificationItems(await getInAppNotifications(true)).length); } catch { /* Notification center exposes loading failures when opened. */ } }, []);
+  useEffect(() => { if (session.status !== "authenticated") return; refreshNotificationCount(); const timer = window.setInterval(refreshNotificationCount, 30000); return () => window.clearInterval(timer); }, [refreshNotificationCount, session.status]);
   useEffect(() => { if (session.status !== "authenticated" || !isAdmin(session.user)) return; getSystemSettings().then(setSystemSettings).catch(() => {}); }, [session.status, session.user]);
   const authenticate = async (username, password) => { await login(username, password); setSession({ status: "authenticated", user: await getCurrentUser() }); };
-  const logout = () => { clearAccessToken(); setSession({ status: "anonymous", user: null }); setHosts([]); setIncidents([]); setSelectedHost(null); setDrawer(null); setSystemSettings(null); };
+  const logout = () => { clearAccessToken(); setSession({ status: "anonymous", user: null }); setHosts([]); setIncidents([]); setSelectedHost(null); setDrawer(null); setSystemSettings(null); setNotificationCount(0); setNotificationsOpen(false); };
   const openHost = (host) => { setSelectedHost({ ...hosts.find((item) => item.id === host.id), ...host }); setDrawer(null); };
   const updateIncident = async (id, action, note) => { const operation = action === "确认" ? "acknowledge" : action === "静默" ? "silence" : "maintenance"; await requestJson(`/api/incidents/${id}/${operation}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note: note || null }) }); setDrawer(null); await loadDashboard(); };
   const saveHost = async (host) => { const saved = await requestJson(host.originalName ? `/api/hosts/${encodeURIComponent(host.originalName)}` : "/api/hosts", { method: host.originalName ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: host.id, ip: host.ip, group: host.group, room: host.room, service: host.service }) }); setHosts((current) => host.originalName ? current.map((item) => item.id === host.originalName ? { ...saved, event: "-" } : item) : [...current, { ...saved, event: "-" }].sort((left, right) => left.id.localeCompare(right.id))); };
@@ -199,5 +255,5 @@ export function App() {
   else if (active === "通知") content = <NotificationPage user={session.user} />;
   else if (active === "设置" && isAdmin(session.user)) content = <SettingsPage onSaved={setSystemSettings} onOpenNotifications={() => setActive("通知")} />;
   else if (active === "用户" && isAdmin(session.user)) content = <UsersPage />;
-  return <AppShell active={active} setActive={(next) => { setSelectedHost(null); setActive(next); }} incidentCount={incidents.length} ha={ha} dataStatus={dataState.status} user={session.user} onLogout={logout} siteName={systemSettings?.siteName}>{content}<IncidentDrawer incident={drawer} onClose={() => setDrawer(null)} onUpdate={updateIncident} onOpenHost={openHost} canOperate={isOperator(session.user)} /></AppShell>;
+  return <AppShell active={active} setActive={(next) => { setSelectedHost(null); setActive(next); }} incidentCount={incidents.length} notificationCount={notificationCount} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((open) => !open)} onCloseNotifications={() => setNotificationsOpen(false)} onNotificationsChanged={refreshNotificationCount} ha={ha} dataStatus={dataState.status} user={session.user} onLogout={logout} siteName={systemSettings?.siteName}>{content}<IncidentDrawer incident={drawer} onClose={() => setDrawer(null)} onUpdate={updateIncident} onOpenHost={openHost} canOperate={isOperator(session.user)} /></AppShell>;
 }
