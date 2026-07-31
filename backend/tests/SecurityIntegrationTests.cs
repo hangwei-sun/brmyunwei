@@ -101,6 +101,22 @@ public sealed class SecurityIntegrationTests
     }
 
     [Fact]
+    public async Task Admin_CanCreateUser_AndResetPassword()
+    {
+        await using var factory = new ApiFactory();
+        using var client = factory.CreateClient();
+        var adminToken = await LoginAsync(client, ApiFactory.AdminUser, ApiFactory.AdminPassword);
+        await CreateUserAsync(client, adminToken, "ui-account", "Ui-Account-2026!", "Viewer");
+
+        Authorize(client, adminToken);
+        var update = await client.PutAsJsonAsync("/api/users/ui-account", new { role = "Operator", enabled = true, password = "Ui-Account-Rotated-2026!" }, CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+
+        var rotatedToken = await LoginAsync(client, "ui-account", "Ui-Account-Rotated-2026!");
+        Assert.False(string.IsNullOrWhiteSpace(rotatedToken));
+    }
+
+    [Fact]
     public async Task Admin_CanPersistSettings_WithoutReadingBackSecrets()
     {
         await using var factory = new ApiFactory();

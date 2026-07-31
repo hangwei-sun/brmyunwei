@@ -22,6 +22,17 @@ test("requestJson exposes backend validation messages", async (t) => {
   });
 });
 
+test("requestJson prefers a field-level validation message", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+    title: "One or more validation errors occurred.",
+    errors: { password: ["密码至少 12 位，并同时包含大写字母、小写字母、数字和符号。"] },
+  }), { status: 400, headers: { "Content-Type": "application/json" } }));
+  await assert.rejects(requestJson("/api/users"), (error) => {
+    assert.equal(error.message, "密码至少 12 位，并同时包含大写字母、小写字母、数字和符号。");
+    return true;
+  });
+});
+
 test("requestJson adds the bearer token to authenticated calls", async (t) => {
   setAccessToken("test-access-token");
   t.after(() => clearAccessToken());

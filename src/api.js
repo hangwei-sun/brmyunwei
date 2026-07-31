@@ -37,10 +37,11 @@ export async function requestJson(path, options = {}) {
 
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
+    const validationMessage = Object.values(payload?.errors || {}).flat().find((message) => typeof message === "string" && message.trim());
     const message = payload?.error
       || payload?.detail
+      || validationMessage
       || payload?.title
-      || payload?.errors?.host?.[0]
       || `请求失败（HTTP ${response.status}）`;
     throw new ApiError(message, response.status, payload);
   }
