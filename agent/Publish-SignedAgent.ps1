@@ -1,23 +1,61 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')][string]$CodeSigningCertificateThumbprint,
-  [Parameter(Mandatory = $true)][uri]$TimestampServer,
+  [uri]$TimestampServer,
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')][string]$ProductVersion,
   [string]$PublishedInputDirectory = $PSScriptRoot,
-  [string]$OutputDirectory = (Join-Path $PSScriptRoot 'package')
+  [string]$OutputDirectory = (Join-Path $PSScriptRoot 'package'),
+  [string]$SignToolPath,
+  [string]$WixPath
 )
 
 $ErrorActionPreference = 'Stop'
-if ($TimestampServer.Scheme -ne 'http' -and $TimestampServer.Scheme -ne 'https') { throw 'TimestampServer must be HTTP or HTTPS.' }
+if ($TimestampServer -and $TimestampServer.Scheme -ne 'http' -and $TimestampServer.Scheme -ne 'https') {
+  throw 'TimestampServer must be HTTP or HTTPS.'
+}
 $thumbprint = $CodeSigningCertificateThumbprint.Replace(' ', '').ToUpperInvariant()
 $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint.ToUpperInvariant() -eq $thumbprint -and $_.HasPrivateKey } | Select-Object -First 1
 if (-not $certificate) { throw 'A code-signing certificate with private key was not found in CurrentUser\\My.' }
-$signtool = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+$codeSigningExtension = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+if ($codeSigningExtension.Count -ne 1) { throw 'Signing certificate is missing Enhanced Key Usage.' }
+$decodedUsage = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+$decodedUsage.CopyFrom($codeSigningExtension[0])
+if (-not ($decodedUsage.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' })) {
+  throw 'Signing certificate is missing the Code Signing EKU.'
+}
+if ($certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow.AddDays(30)) {
+  throw 'Signing certificate expires in 30 days or less.'
+}
+foreach ($store in @('TrustedPeople', 'TrustedPublisher')) {
+  if (-not (Test-Path -LiteralPath "Cert:\CurrentUser\$store\$thumbprint")) {
+    throw "Signing certificate must be trusted in CurrentUser\\$store before publication."
+  }
+}
+
+$signtool = $SignToolPath
+if (-not $signtool) { $signtool = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source }
+if (-not $signtool) {
+  $kitRoot = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits\10\bin'
+  $signtool = Get-ChildItem -Path (Join-Path $kitRoot '*\x64\signtool.exe') -File -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+}
 if (-not $signtool) { throw 'signtool.exe was not found. Install the Windows SDK signing tools; signing is required.' }
-$wix = (Get-Command wix.exe -ErrorAction SilentlyContinue).Source
+$wix = $WixPath
+if (-not $wix) { $wix = (Get-Command wix.exe -ErrorAction SilentlyContinue).Source }
 if (-not $wix) { throw 'wix.exe was not found. Install WiX Toolset v4; a signed MSI is required.' }
+if (-not (Test-Path -LiteralPath $signtool -PathType Leaf)) { throw "signtool.exe does not exist: $signtool" }
+if (-not (Test-Path -LiteralPath $wix -PathType Leaf)) { throw "wix.exe does not exist: $wix" }
 if ((Test-Path -LiteralPath $OutputDirectory) -and (Get-ChildItem -LiteralPath $OutputDirectory -Force | Select-Object -First 1)) {
   throw "OutputDirectory must be empty to prevent stale or unhashed package files: $OutputDirectory"
+}
+
+function Invoke-SignTool {
+  param([string]$FilePath)
+  $arguments = @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $thumbprint)
+  if ($TimestampServer) { $arguments += @('/tr', $TimestampServer.AbsoluteUri, '/td', 'SHA256') }
+  $arguments += $FilePath
+  & $signtool @arguments
+  if ($LASTEXITCODE -ne 0) { throw "signtool signing failed: $FilePath" }
 }
 
 if (-not $PSCmdlet.ShouldProcess($OutputDirectory, 'Build and sign Agent package')) { return }
@@ -42,23 +80,44 @@ try {
   foreach ($script in @('Install-Agent.ps1', 'Enroll-Agent.ps1', 'Rotate-AgentCertificate.ps1', 'Upgrade-Agent.ps1', 'Uninstall-Agent.ps1', 'Verify-AgentPackage.ps1', 'Measure-AgentResource.ps1', 'Test-AgentScripts.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination $OutputDirectory -Force
   }
+  $publicCertificatePath = Join-Path $OutputDirectory 'MonitoringPlatform.LocalAgentSigner.cer'
+  Export-Certificate -Cert $certificate -FilePath $publicCertificatePath -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $OutputDirectory 'SIGNER-SHA1.txt') -Value $thumbprint -Encoding ascii
   $targetExe = Join-Path $OutputDirectory 'MonitoringPlatform.Agent.exe'
-  & $signtool sign /fd SHA256 /sha1 $thumbprint /tr $TimestampServer.AbsoluteUri /td SHA256 $targetExe
-  if ($LASTEXITCODE -ne 0) { throw 'signtool signing failed.' }
+  Invoke-SignTool $targetExe
   Get-ChildItem -LiteralPath $OutputDirectory -Filter '*.ps1' -File | ForEach-Object {
-    $signature = Set-AuthenticodeSignature -LiteralPath $_.FullName -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer $TimestampServer.AbsoluteUri
-    if ($signature.Status -ne 'Valid') { throw "PowerShell signing failed: $($_.Name): $($signature.StatusMessage)" }
+    $parameters = @{ LiteralPath = $_.FullName; Certificate = $certificate; HashAlgorithm = 'SHA256' }
+    if ($TimestampServer) { $parameters.TimestampServer = $TimestampServer.AbsoluteUri }
+    $signature = Set-AuthenticodeSignature @parameters
+    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $thumbprint -or
+        $signature.Status -notin @('Valid', 'UnknownError', 'NotTrusted')) {
+      throw "PowerShell signing failed: $($_.Name): $($signature.StatusMessage)"
+    }
   }
   $verify = Join-Path $OutputDirectory 'Verify-AgentPackage.ps1'
-  & $verify -FilePath $targetExe -ExpectedSignerThumbprint $thumbprint
-  Get-ChildItem -LiteralPath $OutputDirectory -Filter '*.ps1' -File | ForEach-Object { & $verify -FilePath $_.FullName -ExpectedSignerThumbprint $thumbprint }
+  & $verify -FilePath $targetExe -ExpectedSignerThumbprint $thumbprint -AllowUntrustedRoot
+  Get-ChildItem -LiteralPath $OutputDirectory -Filter '*.ps1' -File | ForEach-Object {
+    & $verify -FilePath $_.FullName -ExpectedSignerThumbprint $thumbprint -AllowUntrustedRoot
+  }
+
+  $certificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($certificate.RawData))).Replace('-', '')
+  [ordered]@{
+    product = 'MonitoringPlatform.Agent'
+    version = $ProductVersion
+    signerSubject = $certificate.Subject
+    signerThumbprintSha1 = $thumbprint
+    signerCertificateSha256 = $certificateSha256
+    signerNotAfter = $certificate.NotAfter.ToUniversalTime().ToString('O')
+    timestamped = [bool]$TimestampServer
+    trustStores = @('Root', 'TrustedPublisher')
+    scope = 'internal-lan-validation'
+  } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'package.json') -Encoding utf8
 
   $msiPath = Join-Path $OutputDirectory "MonitoringPlatform.Agent-$ProductVersion-x64.msi"
   & $wix build (Join-Path $PSScriptRoot 'AgentInstaller.wxs') -arch x64 -d "SourceDir=$OutputDirectory" -d "ProductVersion=$ProductVersion" -o $msiPath
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $msiPath)) { throw 'WiX MSI build failed.' }
-  & $signtool sign /fd SHA256 /sha1 $thumbprint /tr $TimestampServer.AbsoluteUri /td SHA256 $msiPath
-  if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed.' }
-  & $verify -FilePath $msiPath -ExpectedSignerThumbprint $thumbprint
+  Invoke-SignTool $msiPath
+  & $verify -FilePath $msiPath -ExpectedSignerThumbprint $thumbprint -AllowUntrustedRoot
 
   Get-ChildItem -LiteralPath $OutputDirectory -File | Sort-Object Name | ForEach-Object {
     "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
@@ -68,3 +127,4 @@ finally {
   if (Test-Path -LiteralPath $publishDirectory) { Remove-Item -LiteralPath $publishDirectory -Recurse -Force }
 }
 Write-Host "Signed EXE, PowerShell delivery scripts, and MSI created at $OutputDirectory"
+if (-not $TimestampServer) { Write-Host 'No timestamp was used; signatures remain valid only while the local signer certificate is valid.' }

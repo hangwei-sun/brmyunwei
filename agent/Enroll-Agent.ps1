@@ -1,4 +1,5 @@
 #Requires -RunAsAdministrator
+#Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9._-]{1,64}$')][string]$AgentName,
@@ -96,7 +97,8 @@ $keyName = $certificate.PrivateKey.CspKeyContainerInfo.UniqueKeyContainerName
 $keyPath = Join-Path "$env:ProgramData\Microsoft\Crypto\RSA\MachineKeys" $keyName
 if (-not (Test-Path -LiteralPath $keyPath)) { throw 'Could not locate the CSP private key file for LOCAL SERVICE access.' }
 $acl = Get-Acl -LiteralPath $keyPath
-$acl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule('LOCAL SERVICE', 'Read', 'Allow')))
+$localServiceSid = New-Object Security.Principal.SecurityIdentifier('S-1-5-19')
+$acl.SetAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($localServiceSid, 'Read', 'Allow')))
 Set-Acl -LiteralPath $keyPath -AclObject $acl
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -106,7 +108,7 @@ $configBackup = "$configPath.pre-enrollment-$(Get-Date -Format yyyyMMddHHmmss)"
 Copy-Item -LiteralPath $configPath -Destination $configBackup -Force
 try {
   New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null
-  & icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'LOCAL SERVICE:(OI)(CI)M' | Out-Null
+  & icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the Agent data directory.' }
   [xml]$configuration = Get-Content -LiteralPath $configPath -Raw
   $updates = @{ AgentName = $AgentName; AgentKey = ''; PrimaryEndpoint = $IngestEndpoint.AbsoluteUri; DataDirectory = $DataRoot; RequireClientCertificate = 'true'; ClientCertificateStoreLocation = 'LocalMachine'; ClientCertificateStoreName = 'My'; ClientCertificateThumbprint = $actualSha256 }

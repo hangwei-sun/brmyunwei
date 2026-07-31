@@ -15,7 +15,7 @@
                             Type="ownProcess" Start="demand" ErrorControl="normal" Account="NT AUTHORITY\LocalService" />
             <ServiceControl Id="ControlAgentService" Name="MonitoringPlatformAgent" Stop="both" Remove="uninstall" Wait="yes" />
           </Component>
-          <Component Id="AgentDeliveryScripts" Guid="*">
+          <Component Id="AgentDeliveryScripts" Guid="B2145EAA-2F0C-4A47-91F6-38D3D6B93360">
             <File Source="$(var.SourceDir)\Enroll-Agent.ps1" />
             <File Source="$(var.SourceDir)\Rotate-AgentCertificate.ps1" />
             <File Source="$(var.SourceDir)\Upgrade-Agent.ps1" />
@@ -23,6 +23,9 @@
             <File Source="$(var.SourceDir)\Verify-AgentPackage.ps1" />
             <File Source="$(var.SourceDir)\Measure-AgentResource.ps1" />
             <File Source="$(var.SourceDir)\README.md" />
+            <File Source="$(var.SourceDir)\MonitoringPlatform.LocalAgentSigner.cer" />
+            <File Source="$(var.SourceDir)\SIGNER-SHA1.txt" />
+            <File Source="$(var.SourceDir)\package.json" />
           </Component>
         </Directory>
       </Directory>

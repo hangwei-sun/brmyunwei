@@ -1,4 +1,5 @@
 #Requires -RunAsAdministrator
+#Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory = $true)]
@@ -28,7 +29,7 @@ if ($PrimaryEndpoint.Scheme -ne 'https' -or ($SecondaryEndpoint -and $SecondaryE
     throw 'Agent endpoints must use HTTPS.'
 }
 if (-not $AgentKey -and -not $DeferStartUntilEnrollment) { throw 'Provide AgentKey for legacy enrollment, or use DeferStartUntilEnrollment for one-time mTLS enrollment.' }
-if ($WatchedServices.Count -gt 32 -or $WatchedServices | Where-Object { $_.Length -gt 128 }) {
+if ($WatchedServices.Count -gt 32 -or @($WatchedServices | Where-Object { $_.Length -gt 128 }).Count -gt 0) {
     throw 'WatchedServices accepts at most 32 service names, each up to 128 characters.'
 }
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) { throw "Service already exists: $ServiceName" }
@@ -88,9 +89,9 @@ finally {
 $startMode = if ($DeferStartUntilEnrollment) { 'demand' } else { 'auto' }
 & sc.exe create $ServiceName "binPath= `"$targetExe`"" "start= $startMode" 'obj= NT AUTHORITY\LocalService' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Failed to create the Agent service.' }
-& icacls.exe $InstallRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'LOCAL SERVICE:(OI)(CI)RX' | Out-Null
+& icacls.exe $InstallRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' '*S-1-5-19:(OI)(CI)RX' | Out-Null
 if ($LASTEXITCODE -ne 0) { & sc.exe delete $ServiceName | Out-Null; throw 'Failed to secure the Agent application directory.' }
-& icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'LOCAL SERVICE:(OI)(CI)M' | Out-Null
+& icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' | Out-Null
 if ($LASTEXITCODE -ne 0) { & sc.exe delete $ServiceName | Out-Null; throw 'Failed to secure the Agent data directory.' }
 & sc.exe description $ServiceName 'Read-only outbound monitoring agent' | Out-Null
 & sc.exe failure $ServiceName 'reset=86400' 'actions=restart/60000/restart/300000' | Out-Null

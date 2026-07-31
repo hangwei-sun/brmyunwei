@@ -11,7 +11,7 @@
 1. 两台同版本控制端，各自使用独立服务身份、HTTPS 证书、数据目录和防火墙白名单；被动端不能接受生产 Agent 写入。
 2. 独立 witness 提供 HTTPS `PUT /v1/leases/{clusterId}`，为单个 owner 保存租约和递增 epoch；其数据与两个控制端故障域隔离。必须验证鉴权、时钟同步、断连、重启和拒绝旧 epoch。
 3. 复制目录必须是两节点都能访问的独立快照传输位置，仅允许两台控制端机器/服务身份读写，且不得与 SQLite 数据库目录混用。模板使用受控 SMB 快照共享；SQLite 运行库和被动副本始终位于各节点本机 NTFS，严禁把活动 SQLite 放到 SMB。每次快照的 SHA-256 和清单链都要保存，并现场验证共享语义、权限和断连行为。
-4. 两节点均启用单位受信任 TLS，Agent mTLS 与企业签名 MSI 已在 Windows Server 2012/2012 R2 非关键机器通过现场验收。
+4. 两节点均启用单位受信任 TLS，Agent mTLS 与固定本地签名或单位签名 MSI 已在 Windows Server 2012/2012 R2 非关键机器通过现场验收。
 5. 腾讯云短信保持 `disabled` 或仅测试号码的 `test`。切换演练不得向真实联系人发送短信。
 
 Witness 使用发布包 `witness\Install-WitnessService.ps1` 安装，必须传入单位受信任 HTTPS 证书的 SHA-256 指纹。服务脚本会验证配置 subject、`LocalMachine\My`、Server Authentication EKU 和私钥，并向虚拟服务账号授予最小读取权限；缺少任一项即停止安装。

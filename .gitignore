@@ -7,6 +7,10 @@ artifacts/
 **/bin/
 **/obj/
 agent/publish/
+agent/.tools/
+agent/local-signer/
+agent/local-package/
+agent/local-package*.zip*
 backend/Data/*.db
 backend/Data/*.db-wal
 backend/Data/*.db-shm

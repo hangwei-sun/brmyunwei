@@ -132,6 +132,7 @@ try {
     Copy-ReleaseItems -SourceDirectory '.\agent' -DestinationDirectory $agentRoot -Names @(
         'Install-Agent.ps1', 'Enroll-Agent.ps1', 'Rotate-AgentCertificate.ps1', 'Upgrade-Agent.ps1',
         'Uninstall-Agent.ps1', 'Verify-AgentPackage.ps1', 'Publish-SignedAgent.ps1',
+        'New-LocalCodeSigningCertificate.ps1', 'Build-LocalSignedAgent.ps1',
         'Test-AgentScripts.ps1', 'Measure-AgentResource.ps1', 'README.md', 'AgentInstaller.wxs'
     )
     @'
@@ -141,8 +142,9 @@ The Agent executable and PowerShell scripts in this release candidate are unsign
 Do not run Install-Agent.ps1, install an MSI, or run enrollment scripts from this package.
 Use these files only for build and test evaluation until a signed release is issued.
 
-Production Agent delivery must use agent\Publish-SignedAgent.ps1 with a real code-signing certificate,
-signtool.exe, and WiX Toolset v4. That process signs the executable, delivery scripts, and MSI.
+Production Agent delivery must use agent\Publish-SignedAgent.ps1 with an approved signer,
+signtool.exe, and WiX Toolset v4. Internal validation may use the pinned local-signer workflow;
+broader production rollout should replace it with the unit's managed code-signing identity.
 '@ | Set-Content -LiteralPath (Join-Path $agentRoot 'UNSIGNED-RC-NOT-INSTALLABLE.txt') -Encoding ascii
 
     Copy-Item -LiteralPath '.\witness\appsettings.json' -Destination (Join-Path $witnessRoot 'appsettings.Production.template.json')
@@ -165,7 +167,7 @@ signtool.exe, and WiX Toolset v4. That process signs the executable, delivery sc
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $releaseRoot 'release.json') -Encoding utf8
 
     Get-ChildItem -LiteralPath $releaseRoot -Recurse -File | Sort-Object FullName | ForEach-Object {
-        $relative = [System.IO.Path]::GetRelativePath($releaseRoot, $_.FullName)
+        $relative = $_.FullName.Substring($releaseRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $relative"
     } | Set-Content -LiteralPath (Join-Path $releaseRoot 'SHA256SUMS') -Encoding utf8

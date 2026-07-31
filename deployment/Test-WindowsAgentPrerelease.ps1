@@ -1,4 +1,5 @@
 #Requires -RunAsAdministrator
+#Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [ValidateSet('Check', 'CaptureOfflineCache', 'Rollback')][string]$Mode = 'Check',
@@ -6,6 +7,8 @@ param(
   [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform\Agent",
   [string]$DataRoot = "$env:ProgramData\MonitoringPlatform\Agent",
   [string]$ApprovedRootCertificateThumbprint,
+  [ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')][string]$ApprovedSignerThumbprint,
+  [string]$MsiPath,
   [int]$MinimumPendingSamples = 1,
   [switch]$ConfirmRollback,
   [string]$OutputPath = (Join-Path $PWD ("agent-prerelease-check-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json'))
@@ -38,13 +41,32 @@ try {
 
   if ($Mode -eq 'Rollback') {
     if (-not $ConfirmRollback) { throw 'Rollback is destructive. Re-run with -ConfirmRollback after preserving the JSON evidence and obtaining the change approval.' }
-    $uninstall = Join-Path $InstallRoot 'Uninstall-Agent.ps1'
-    if (-not (Test-Path -LiteralPath $uninstall)) { throw "Uninstall script not found: $uninstall" }
-    $backupRoot = Join-Path $DataRoot ('rollback-evidence-' + (Get-Date -Format 'yyyyMMddHHmmss'))
+    if (-not $ApprovedSignerThumbprint) { throw 'ApprovedSignerThumbprint is required for rollback.' }
+    $backupParent = Split-Path -Parent $DataRoot
+    $backupRoot = Join-Path $backupParent ('Agent-rollback-evidence-' + (Get-Date -Format 'yyyyMMddHHmmss'))
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
     if (Test-Path -LiteralPath $DataRoot) { Copy-Item -LiteralPath $DataRoot -Destination (Join-Path $backupRoot 'AgentData') -Recurse -Force }
-    if (-not $PSCmdlet.ShouldProcess($ServiceName, 'Uninstall Agent while retaining telemetry data')) { return }
-    & $uninstall -InstallRoot $InstallRoot -DataRoot $DataRoot -ServiceName $ServiceName
+    if ($MsiPath) {
+      $resolvedMsi = (Resolve-Path -LiteralPath $MsiPath -ErrorAction Stop).Path
+      $signature = Get-AuthenticodeSignature -LiteralPath $resolvedMsi
+      $expectedSigner = $ApprovedSignerThumbprint.Replace(' ', '').ToUpperInvariant()
+      if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+          $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $expectedSigner) {
+        throw 'Rollback MSI signature is invalid or does not match the approved signer.'
+      }
+      if (-not $PSCmdlet.ShouldProcess($ServiceName, 'Uninstall MSI-managed Agent while retaining telemetry data')) { return }
+      $msiLog = Join-Path $backupRoot 'agent-msi-uninstall.log'
+      $arguments = "/x `"$resolvedMsi`" /qn /norestart /l*v `"$msiLog`""
+      $result = Start-Process msiexec.exe -ArgumentList $arguments -Wait -PassThru
+      if ($result.ExitCode -notin 0, 3010) { throw "MSI rollback failed with exit code $($result.ExitCode); inspect $msiLog" }
+    }
+    else {
+      $uninstall = Join-Path $InstallRoot 'Uninstall-Agent.ps1'
+      if (-not (Test-Path -LiteralPath $uninstall)) { throw "Uninstall script not found: $uninstall" }
+      if (-not $PSCmdlet.ShouldProcess($ServiceName, 'Uninstall script-managed Agent while retaining telemetry data')) { return }
+      & $uninstall -InstallRoot $InstallRoot -DataRoot $DataRoot -ServiceName $ServiceName `
+        -ApprovedSignerThumbprint $ApprovedSignerThumbprint -Confirm:$false
+    }
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) { Add-Check 'uninstall-rollback' 'failed' 'Agent service still exists after uninstall.' $null }
     elseif (-not (Test-Path -LiteralPath $DataRoot)) { Add-Check 'uninstall-rollback' 'failed' 'Agent data was not retained after uninstall.' $null }
     else { Add-Check 'uninstall-rollback' 'passed' 'Agent service and binaries were removed; local telemetry was retained for recovery.' @{ evidenceBackup = $backupRoot; dataRoot = $DataRoot } }

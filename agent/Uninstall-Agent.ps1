@@ -1,4 +1,5 @@
 #Requires -RunAsAdministrator
+#Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform\Agent",
