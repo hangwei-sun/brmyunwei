@@ -21,7 +21,7 @@ $env:Authentication__BootstrapAdmin__Username = 'your-admin-name'
 $env:Authentication__BootstrapAdmin__Password = 'a-unique-long-password'
 ```
 
-After the first account is stored, remove these environment variables. Production must expose HTTPS only. Data Protection keys are persisted outside the repository and protected with Windows DPAPI.
+After the first account is stored, remove these environment variables. Production must expose HTTPS only. Data Protection keys are persisted outside the repository and protected with Windows DPAPI. In an HA pair, DPAPI cannot protect a shared key ring: both nodes must instead share a protected key directory and use the same private-key certificate in `LocalMachine\My`, configured through `Authentication:DataProtectionCertificateThumbprint`.
 
 The production Windows service runs as a virtual service account. `Install-Service.ps1` requires the SHA-256 fingerprints of the center HTTPS certificate and, when enrollment is enabled, the Agent issuing CA certificate; it grants that identity read access only to those RSA private-key files. Do not grant the service account broad access to the machine certificate store or run it as Administrator.
 
@@ -43,4 +43,4 @@ Before calling Tencent Cloud, the worker persists an in-flight state. If the wit
 
 ## HA boundary
 
-The default configuration is single node (`HighAvailability:Enabled=false`). HA code has witness-lease, fencing epoch and snapshot replication primitives, but no real two-node/witness validation has been completed. Promotion is an approved manual operation, not an automatic failover claim: isolate or fence the previous writer, verify lease expiry/ownership and replica integrity, then use the controlled promotion procedure. Do not enable HA in production until its deployment, fault-switch and recovery-replay drill has passed.
+The default configuration is single node (`HighAvailability:Enabled=false`). HA includes witness leases, fencing epochs, snapshot replication, a standby watcher and `/api/ready`, which reports HTTP 200 only for a database-connected writer holding a valid witness lease. The watcher can promote only after the primary ready check fails and the independent witness grants a new epoch; the promoted process must prove that same epoch through `/api/ready`. This is a deployment capability, not field evidence. Do not enable HA in production until the two-node/witness deployment, manual switch, service-loss switch, network-partition protection, old-node replay and controlled reverse-switch drills have passed.

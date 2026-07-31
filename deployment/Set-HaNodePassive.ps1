@@ -29,4 +29,4 @@ catch {
   Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
   throw
 }
-Write-Host "Node is passive. Wait at least one lease TTL before promoting another node. Configuration backup: $backup"
+Write-Host "Node is passive. Do not start its failover watcher until the peer is confirmed ready. Wait at least one lease TTL before promoting another node. Configuration backup: $backup"

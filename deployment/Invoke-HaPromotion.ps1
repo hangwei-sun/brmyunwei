@@ -10,14 +10,16 @@ param(
   [string]$ConfigurationPath = "$env:ProgramFiles\MonitoringPlatform\app\appsettings.Production.json",
   [string]$ApplicationPath = "$env:ProgramFiles\MonitoringPlatform\app\MonitoringPlatform.Api.exe",
   [string]$ServiceName = 'MonitoringPlatform',
-  [uri]$HealthUrl,
+  [Parameter(Mandatory = $true)][uri]$ReadyUrl,
+  [ValidateRange(5, 300)][int]$LeaseTtlSeconds = 60,
+  [ValidateRange(5, 120)][int]$ReadyTimeoutSeconds = 45,
   [switch]$ConfirmPromotion
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if (-not $ConfirmPromotion) { throw 'ConfirmPromotion is required after verifying that the previous active node is fenced or its lease has expired.' }
-if ($WitnessUrl.Scheme -ne 'https') { throw 'WitnessUrl must use HTTPS.' }
+if ($WitnessUrl.Scheme -ne 'https' -or $ReadyUrl.Scheme -ne 'https') { throw 'WitnessUrl and ReadyUrl must use HTTPS.' }
 $replica = [IO.Path]::GetFullPath($StandbyReplicaPath)
 $database = [IO.Path]::GetFullPath($DatabasePath)
 $configuration = [IO.Path]::GetFullPath($ConfigurationPath)
@@ -33,7 +35,7 @@ try {
   $tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($WitnessBearerToken)
   $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer)
   $leaseUri = [uri]::new($WitnessUrl, "v1/leases/$([uri]::EscapeDataString($ClusterId))")
-  $body = @{ clusterId = $ClusterId; owner = $NodeId; ttlSeconds = 30; previousEpoch = $null } | ConvertTo-Json -Compress
+  $body = @{ clusterId = $ClusterId; owner = $NodeId; ttlSeconds = $LeaseTtlSeconds; previousEpoch = $null } | ConvertTo-Json -Compress
   $lease = Invoke-RestMethod -Method Put -Uri $leaseUri -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body $body
   if ($lease.owner -ne $NodeId -or [long]$lease.epoch -le 0 -or [DateTimeOffset]$lease.expiresAt -le [DateTimeOffset]::UtcNow) { throw 'Witness did not return a valid fencing lease for this node.' }
 
@@ -63,11 +65,20 @@ try {
     $serviceEnvironment = @($previousEnvironment | Where-Object { $_ -notlike 'HighAvailability__WitnessBearerToken=*' }) + "HighAvailability__WitnessBearerToken=$token"
     Set-ItemProperty -LiteralPath $serviceKey -Name Environment -Type MultiString -Value $serviceEnvironment
     Start-Service -Name $ServiceName
-    if ($HealthUrl) {
-      Start-Sleep -Seconds 3
-      $health = Invoke-RestMethod -Uri $HealthUrl -Method Get
-      if ($health.status -ne 'healthy' -or $health.database -ne 'connected') { throw 'Promoted node health check failed.' }
+    $readyDeadline = [DateTimeOffset]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
+    $ready = $false
+    while ([DateTimeOffset]::UtcNow -lt $readyDeadline) {
+      try {
+        $status = Invoke-RestMethod -Uri $ReadyUrl -Method Get -TimeoutSec 5
+        if ($status.status -eq 'ready' -and $status.database -eq 'connected' -and $status.role -eq 'active' -and [long]$status.epoch -eq [long]$lease.epoch) {
+          $ready = $true
+          break
+        }
+      }
+      catch { }
+      Start-Sleep -Seconds 2
     }
+    if (-not $ready) { throw "Promoted node did not become ready with witness epoch $($lease.epoch) before timeout." }
   }
   catch {
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue

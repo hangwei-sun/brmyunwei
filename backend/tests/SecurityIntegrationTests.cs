@@ -54,6 +54,7 @@ public sealed class SecurityIntegrationTests
         using var client = factory.CreateClient();
 
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health", CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync("/api/ready", CancellationToken)).StatusCode);
         var anonymousMutation = await client.PostAsJsonAsync("/api/hosts", new { name = "NO-AUTH", ip = "10.9.0.9", room = "测试机房", service = "测试" }, CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousMutation.StatusCode);
         var login = await client.PostAsJsonAsync("/api/auth/login", new { username = ApiFactory.AdminUser, password = ApiFactory.AdminPassword }, CancellationToken);
@@ -67,6 +68,7 @@ public sealed class SecurityIntegrationTests
         using var client = factory.CreateClient();
 
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health", CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/ready", CancellationToken)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/hosts", CancellationToken)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/api/v1/agents/ingest", SampleIngest("WEB-01"), CancellationToken)).StatusCode);
     }

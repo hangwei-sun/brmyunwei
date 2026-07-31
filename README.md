@@ -1,6 +1,6 @@
 # 轻量化 Windows 机房运维监控平台
 
-当前版本定位为 **单节点、隔离预发布**。主备、自动故障转移和生产上线评审暂缓；先在一台 Windows 11 控制端和 1 至 2 台非关键 Windows 服务器上静默运行并收集证据。
+默认仍以 **单节点、隔离预发布** 运行。仓库同时提供双机 HA 的 witness fencing、备用节点自动接管监视器、快照回放和受控回切交付；必须在真实三节点环境完成切换演练后才能启用生产 HA。
 
 ## 当前能力
 
@@ -12,7 +12,7 @@
 - 腾讯云短信：完整通知策略契约、服务器组匹配、联系人组、重试退避、重复提醒和每事件/策略去重。具有 `disabled`、`test`、`live` 三态；预发布初始化为 `disabled`。
 - 数据维护：原始指标保留、审计/事件保留、SQLite 在线备份、SHA-256 校验和停机恢复脚本。
 - Agent 安全交付基础：一次性注册令牌、CSR 签发、mTLS 认证、客户端证书轮换、签名 MSI 与升级回滚脚本。它们尚未完成现场验收。
-- HA 代码基础：witness 租约、fencing epoch、快照复制清单链、被动副本暂存和受控人工提升脚本。真实双节点、witness 和恢复回放尚未验收。
+- HA 生产交付：witness 租约、fencing epoch、`/api/ready` 写入就绪检查、快照复制清单链、被动副本暂存、自动接管监视器、回放校验和受控人工回切脚本。真实双节点、witness 和恢复回放仍需现场验收。
 
 ## 验证
 
@@ -32,12 +32,12 @@ dotnet run --project .\agent\tests\MonitoringPlatform.Agent.SelfTests.csproj -c 
 .\deployment\Publish-Release.ps1 -Version 0.3.0-rc.3
 ```
 
-发布包位于 `artifacts\monitoring-platform-0.3.0-rc.3-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。RC 内 Agent 明确为未签名、不可直接安装；单位内网验收使用 `agent\Build-LocalSignedAgent.ps1` 生成固定本地签名的 EXE、脚本和 MSI。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)，现场验收和回滚证据见 [预发布验收与回滚清单.md](./预发布验收与回滚清单.md)。HA 演练边界见 [deployment/HA-受控切换与恢复回放.md](./deployment/HA-受控切换与恢复回放.md)。
+发布包位于 `artifacts\monitoring-platform-0.3.0-rc.3-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。RC 内 Agent 明确为未签名、不可直接安装；单位内网验收使用 `agent\Build-LocalSignedAgent.ps1` 生成固定本地签名的 EXE、脚本和 MSI。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)，现场验收和回滚证据见 [预发布验收与回滚清单.md](./预发布验收与回滚清单.md)。双机切换、网络分区、回放和回切步骤见 [deployment/HA-双机生产切换与回放.md](./deployment/HA-双机生产切换与回放.md)。
 
 ## 明确限制
 
 - 当前对外可运行范围仍是单节点隔离预发布。只有在 `HighAvailability.Enabled=false` 时 `/api/ha` 返回 `single-node`；不得据此把 HA 代码基础当作已验证高可用。
-- HA 仅支持受控人工切换：运维先确认旧活动节点已隔离或租约过期，再在批准窗口执行提升；不承诺、也不配置自动故障转移。
+- HA 自动接管只在备用节点确认主节点 `/api/ready` 连续失败且 witness 授予新 epoch 后执行；计划切换与回切仍使用受控人工流程。没有共享受保护数据密钥环、独立 witness、负载均衡 ready 检查和完整演练证据时，不配置自动接管。
 - 启用 `AgentEnrollment` 后默认禁止静态 Agent Key；注册成功的资产永久保持证书认证模式，除非重新注册，否则不能通过 Key 降级。一次性注册和 mTLS 仍必须通过 Windows Server 2012/2012 R2、证书信任与轮换回滚现场门禁。
 - Agent 支持单位内网固定本地签名：使用不可导出的 Code Signing 叶证书签署 EXE、脚本和 MSI，服务器按带外核对的唯一指纹导入 Root/TrustedPublisher。更换签名证书、升级/卸载回滚和 Server 2012/2012 R2 实机结果仍是扩大范围前的门禁。
 - 腾讯云短信必须依次完成 `disabled -> test -> live`：先只允许配置的测试号码验证模板、重试和去重；任何真实联系人启用前需通过对应证据。

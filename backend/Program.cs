@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.BearerToken;
@@ -43,7 +44,21 @@ if (string.IsNullOrWhiteSpace(keyPath))
 }
 Directory.CreateDirectory(keyPath);
 var dataProtection = builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyPath));
-if (OperatingSystem.IsWindows()) dataProtection.ProtectKeysWithDpapi();
+var dataProtectionCertificateThumbprint = builder.Configuration["Authentication:DataProtectionCertificateThumbprint"]?.Replace(" ", "").ToUpperInvariant();
+if (!string.IsNullOrWhiteSpace(dataProtectionCertificateThumbprint))
+{
+    var certificate = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+    try
+    {
+        certificate.Open(OpenFlags.ReadOnly);
+        var matches = certificate.Certificates.Find(X509FindType.FindByThumbprint, dataProtectionCertificateThumbprint, validOnly: true)
+            .Cast<X509Certificate2>().Where(item => item.HasPrivateKey).ToArray();
+        if (matches.Length != 1) throw new InvalidOperationException("Data protection certificate must resolve to exactly one valid LocalMachine\\My certificate with a private key.");
+        dataProtection.ProtectKeysWithCertificate(matches[0]);
+    }
+    finally { certificate.Close(); }
+}
+else if (OperatingSystem.IsWindows()) dataProtection.ProtectKeysWithDpapi();
 
 builder.Services.AddAuthentication(options =>
     {
@@ -163,6 +178,23 @@ app.MapGet("/api/health", async (MonitoringDbContext db, CancellationToken cance
     catch
     {
         return Results.Json(new { status = "unhealthy", database = "unavailable", utc = DateTimeOffset.UtcNow }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+app.MapGet("/api/ready", async (MonitoringDbContext db, HaLeaseState haLease, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var now = DateTimeOffset.UtcNow;
+        var database = await db.Database.CanConnectAsync(cancellationToken);
+        var writable = haLease.CanMutate(now);
+        var ha = haLease.Status(now);
+        return database && writable
+            ? Results.Ok(new { status = "ready", database = "connected", role = ha.Mode, epoch = ha.Epoch, utc = now })
+            : Results.Json(new { status = "not-ready", database = database ? "connected" : "unavailable", role = ha.Mode, epoch = ha.Epoch, utc = now }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch
+    {
+        return Results.Json(new { status = "not-ready", database = "unavailable", role = "unknown", utc = DateTimeOffset.UtcNow }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 });
 
