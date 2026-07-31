@@ -74,7 +74,7 @@ try {
   if (git status --porcelain) { throw 'Installer builds require a clean Git working tree.' }
   if (-not $PSCmdlet.ShouldProcess($output, 'Build signed Control, Witness, and Agent MSI packages')) { return }
   New-Item -ItemType Directory -Path $output -Force | Out-Null
-  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules' -PathType Container)) {
+  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules\.bin\vite.cmd' -PathType Leaf)) {
     npm ci
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
   }
