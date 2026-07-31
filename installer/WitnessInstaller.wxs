@@ -1,0 +1,28 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Monitoring Platform Witness" Manufacturer="Monitoring Platform"
+           Version="$(var.ProductVersion)" UpgradeCode="FE450DBF-2526-4822-8F65-9D61CFCD54CD" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Monitoring Platform Witness package is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="CompanyFolder" Name="MonitoringPlatform">
+        <Directory Id="INSTALLFOLDER" Name="WitnessSetup">
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MonitoringPlatformProgramMenu" Name="Monitoring Platform">
+        <Component Id="WitnessSetupShortcut" Guid="4A42932E-BC85-496D-A652-F6D3B0F8D55E">
+          <Shortcut Id="WitnessSetupShortcutLink" Name="Configure Monitoring Witness" Target="[INSTALLFOLDER]MonitoringPlatform.Control.Setup.exe" Arguments="--witness" WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue Root="HKLM" Key="Software\MonitoringPlatform\Witness" Name="SetupShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="ProductFeature" Title="Monitoring Platform Witness" Level="1">
+      <ComponentGroupRef Id="WitnessPayload" />
+      <ComponentRef Id="WitnessSetupShortcut" />
+    </Feature>
+  </Package>
+</Wix>

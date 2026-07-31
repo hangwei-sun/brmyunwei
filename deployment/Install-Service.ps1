@@ -6,6 +6,11 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Fa-f0-9 :]{64,95}$')]
     [string[]]$PrivateKeyCertificateSha256,
+    [ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')]
+    [string]$DataProtectionCertificateThumbprint,
+    [string]$BootstrapUsername,
+    [string]$BootstrapPasswordProtectedFile,
+    [string]$WitnessTokenProtectedFile,
     [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform",
     [string]$DataRoot = "$env:ProgramData\MonitoringPlatform",
     [string]$ServiceName = 'MonitoringPlatform'
@@ -52,6 +57,25 @@ function Get-PinnedCertificate {
     return $matches[0]
 }
 
+function Read-CurrentUserProtectedSecret {
+    param([string]$Path, [string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $localAppData = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($localAppData, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "$Name must be an existing file below the current user LocalAppData directory."
+    }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($resolved)
+        $value = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+        if ([string]::IsNullOrWhiteSpace($value)) { throw "$Name is empty." }
+        return $value
+    }
+    finally {
+        Remove-Item -LiteralPath $resolved -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Grant-CertificatePrivateKeyRead {
     param([string]$CertificateSha256, [string]$Identity)
     $certificate = Get-PinnedCertificate $CertificateSha256
@@ -80,6 +104,12 @@ if (-not (Test-PathUnderRoot $InstallRoot $env:ProgramFiles) -or -not (Test-Path
 }
 $sourceApp = Join-Path $package 'app'
 $sourceConfig = Join-Path $package 'appsettings.Production.json'
+if (-not (Test-Path -LiteralPath $sourceApp -PathType Container)) {
+    $appArchive = Join-Path $package 'app.zip'
+    if (Test-Path -LiteralPath $appArchive -PathType Leaf) {
+        Expand-Archive -LiteralPath $appArchive -DestinationPath $sourceApp -Force
+    }
+}
 if (-not (Test-Path -LiteralPath (Join-Path $sourceApp 'MonitoringPlatform.Api.exe') -PathType Leaf)) {
     throw 'The package does not contain app\MonitoringPlatform.Api.exe.'
 }
@@ -97,6 +127,18 @@ if (-not $certificateConfig -or [string]::IsNullOrWhiteSpace($certificateConfig.
     $certificateConfig.Store -ne 'My' -or $certificateConfig.Location -ne 'LocalMachine' -or $certificateConfig.AllowInvalid -ne $false) {
     throw 'Center HTTPS certificate must use an exact subject from LocalMachine\My with AllowInvalid=false.'
 }
+$dataProtectionCertificate = $null
+if (-not [string]::IsNullOrWhiteSpace($centerConfig.Authentication.DataProtectionCertificateThumbprint)) {
+    $configuredDataProtectionThumbprint = ([string]$centerConfig.Authentication.DataProtectionCertificateThumbprint).Replace(' ', '').ToUpperInvariant()
+    if ($configuredDataProtectionThumbprint -notmatch '^[A-F0-9]{40}$') { throw 'Data Protection certificate thumbprint must contain exactly 40 hexadecimal characters.' }
+    if ([string]::IsNullOrWhiteSpace($DataProtectionCertificateThumbprint) -or $configuredDataProtectionThumbprint -ne $DataProtectionCertificateThumbprint.Replace(' ', '').ToUpperInvariant()) {
+        throw 'DataProtectionCertificateThumbprint must match the certificate referenced by configuration.'
+    }
+    $dataProtectionMatches = @(Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.HasPrivateKey -and $_.Thumbprint.Replace(' ', '').ToUpperInvariant() -eq $configuredDataProtectionThumbprint })
+    if ($dataProtectionMatches.Count -ne 1) { throw 'Exactly one LocalMachine\\My Data Protection certificate with a private key is required.' }
+    $dataProtectionCertificate = $dataProtectionMatches[0]
+}
+elseif ($DataProtectionCertificateThumbprint) { throw 'DataProtectionCertificateThumbprint was supplied but is not referenced by configuration.' }
 $providedPins = @($PrivateKeyCertificateSha256 | ForEach-Object { ConvertTo-NormalizedSha256 $_ } | Select-Object -Unique)
 $pinnedCertificates = @($providedPins | ForEach-Object { Get-PinnedCertificate $_ })
 $httpsStore = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine')
@@ -154,6 +196,13 @@ if (@($providedPins | Where-Object { $_ -notin $requiredPins }).Count -ne 0 -or
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     throw "Service $ServiceName already exists. Use the documented upgrade procedure."
 }
+if (($BootstrapUsername -and -not $BootstrapPasswordProtectedFile) -or (-not $BootstrapUsername -and $BootstrapPasswordProtectedFile)) {
+    throw 'BootstrapUsername and BootstrapPasswordProtectedFile must be supplied together.'
+}
+$bootstrapPassword = Read-CurrentUserProtectedSecret -Path $BootstrapPasswordProtectedFile -Name 'BootstrapPasswordProtectedFile'
+$witnessToken = Read-CurrentUserProtectedSecret -Path $WitnessTokenProtectedFile -Name 'WitnessTokenProtectedFile'
+if ($bootstrapPassword -and ($BootstrapUsername.Trim().Length -lt 3 -or $BootstrapUsername.Trim().Length -gt 64 -or $bootstrapPassword.Length -lt 12)) { throw 'Bootstrap administrator details are invalid.' }
+if ($witnessToken -and ($witnessToken.Length -lt 32 -or $witnessToken.Length -gt 256)) { throw 'Witness token must be between 32 and 256 characters.' }
 
 $targetApp = Join-Path $InstallRoot 'app'
 if (Test-Path -LiteralPath $targetApp) {
@@ -176,6 +225,9 @@ try {
     foreach ($certificateSha256 in ($PrivateKeyCertificateSha256 | Select-Object -Unique)) {
         Grant-CertificatePrivateKeyRead -CertificateSha256 $certificateSha256 -Identity $serviceIdentity
     }
+    if ($dataProtectionCertificate) {
+        Grant-CertificatePrivateKeyRead -CertificateSha256 (Get-CertificateSha256 $dataProtectionCertificate) -Identity $serviceIdentity
+    }
 }
 catch {
     & sc.exe delete $ServiceName | Out-Null
@@ -188,5 +240,23 @@ if ($LASTEXITCODE -ne 0) { & sc.exe delete $ServiceName | Out-Null; throw 'Faile
 & sc.exe description $ServiceName '轻量化 Windows 机房运维监控中心' | Out-Null
 & sc.exe failure $ServiceName 'reset=86400' 'actions=restart/60000/restart/300000' | Out-Null
 & sc.exe failureflag $ServiceName 1 | Out-Null
+if ($bootstrapPassword -or $witnessToken) {
+    $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+    $environment = @()
+    if ($bootstrapPassword) {
+        $environment += 'Authentication__BootstrapAdmin__Enabled=true'
+        $environment += "Authentication__BootstrapAdmin__Username=$($BootstrapUsername.Trim())"
+        $environment += "Authentication__BootstrapAdmin__Password=$bootstrapPassword"
+    }
+    if ($witnessToken) { $environment += "HighAvailability__WitnessBearerToken=$witnessToken" }
+    Set-ItemProperty -LiteralPath $serviceKey -Name Environment -Type MultiString -Value $environment
+}
 Start-Service -Name $ServiceName
+if ($bootstrapPassword) {
+    $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+    $remaining = @((Get-ItemProperty -LiteralPath $serviceKey -Name Environment -ErrorAction SilentlyContinue).Environment | Where-Object { $_ -notlike 'Authentication__BootstrapAdmin__*' })
+    Set-ItemProperty -LiteralPath $serviceKey -Name Environment -Type MultiString -Value $remaining
+}
+$bootstrapPassword = $null
+$witnessToken = $null
 Write-Host "Service installed and started: $ServiceName"

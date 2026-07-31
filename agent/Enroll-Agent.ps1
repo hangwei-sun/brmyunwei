@@ -5,8 +5,11 @@ param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9._-]{1,64}$')][string]$AgentName,
   [Parameter(Mandatory = $true)][uri]$EnrollmentEndpoint,
   [Parameter(Mandatory = $true)][uri]$IngestEndpoint,
-  [Parameter(Mandatory = $true)][Security.SecureString]$OneTimeEnrollmentToken,
+  [Security.SecureString]$OneTimeEnrollmentToken,
+  [string]$TokenProtectedFile,
   [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9 ]{40,59}$')][string]$ApprovedSignerThumbprint,
+  [uri]$SecondaryIngestEndpoint,
+  [string]$WatchedServices = '',
   [string]$DataRoot = "$env:ProgramData\MonitoringPlatform\Agent",
   [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform\Agent",
   [string]$ServiceName = 'MonitoringPlatformAgent'
@@ -35,6 +38,25 @@ if ($selfSignature.Status -ne 'Valid' -or -not $selfSignature.SignerCertificate 
 if ($EnrollmentEndpoint.Scheme -ne 'https' -or $IngestEndpoint.Scheme -ne 'https') { throw 'Enrollment and ingest endpoints must use HTTPS.' }
 $configPath = Join-Path $InstallRoot 'MonitoringPlatform.Agent.exe.config'
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'Install the signed Agent package before enrollment.' }
+if ($TokenProtectedFile) {
+  if ($OneTimeEnrollmentToken) { throw 'Specify either OneTimeEnrollmentToken or TokenProtectedFile, not both.' }
+  $resolvedTokenFile = [IO.Path]::GetFullPath($TokenProtectedFile)
+  $localAppData = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if (-not $resolvedTokenFile.StartsWith($localAppData, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $resolvedTokenFile -PathType Leaf)) {
+    throw 'TokenProtectedFile must be an existing file below the current user LocalAppData directory.'
+  }
+  try {
+    $protectedToken = [IO.File]::ReadAllBytes($resolvedTokenFile)
+    $plainToken = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($protectedToken, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+    $OneTimeEnrollmentToken = ConvertTo-SecureString -String $plainToken -AsPlainText -Force
+  }
+  finally {
+    $plainToken = $null
+    Remove-Item -LiteralPath $resolvedTokenFile -Force -ErrorAction SilentlyContinue
+  }
+}
+if (-not $OneTimeEnrollmentToken) { throw 'OneTimeEnrollmentToken or TokenProtectedFile is required.' }
+if ($SecondaryIngestEndpoint -and $SecondaryIngestEndpoint.Scheme -ne 'https') { throw 'SecondaryIngestEndpoint must use HTTPS.' }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $DataRoot.StartsWith($programDataRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'DataRoot must remain below ProgramData.' }
@@ -111,7 +133,7 @@ try {
   & icacls.exe $DataRoot /inheritance:r /grant:r 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the Agent data directory.' }
   [xml]$configuration = Get-Content -LiteralPath $configPath -Raw
-  $updates = @{ AgentName = $AgentName; AgentKey = ''; PrimaryEndpoint = $IngestEndpoint.AbsoluteUri; DataDirectory = $DataRoot; RequireClientCertificate = 'true'; ClientCertificateStoreLocation = 'LocalMachine'; ClientCertificateStoreName = 'My'; ClientCertificateThumbprint = $actualSha256 }
+  $updates = @{ AgentName = $AgentName; AgentKey = ''; PrimaryEndpoint = $IngestEndpoint.AbsoluteUri; SecondaryEndpoint = if ($SecondaryIngestEndpoint) { $SecondaryIngestEndpoint.AbsoluteUri } else { '' }; WatchedServices = $WatchedServices.Trim(); DataDirectory = $DataRoot; RequireClientCertificate = 'true'; ClientCertificateStoreLocation = 'LocalMachine'; ClientCertificateStoreName = 'My'; ClientCertificateThumbprint = $actualSha256 }
   foreach ($key in $updates.Keys) {
     $node = $configuration.configuration.appSettings.add | Where-Object key -eq $key
     if (-not $node) { throw "Agent configuration key is missing: $key" }

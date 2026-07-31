@@ -16,6 +16,7 @@
             <ServiceControl Id="ControlAgentService" Name="MonitoringPlatformAgent" Stop="both" Remove="uninstall" Wait="yes" />
           </Component>
           <Component Id="AgentDeliveryScripts" Guid="B2145EAA-2F0C-4A47-91F6-38D3D6B93360">
+            <File Id="AgentSetupExecutable" Source="$(var.SourceDir)\MonitoringPlatform.Agent.Setup.exe" />
             <File Source="$(var.SourceDir)\Enroll-Agent.ps1" />
             <File Source="$(var.SourceDir)\Rotate-AgentCertificate.ps1" />
             <File Source="$(var.SourceDir)\Upgrade-Agent.ps1" />
@@ -31,9 +32,19 @@
       </Directory>
     </StandardDirectory>
 
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MonitoringPlatformProgramMenu" Name="Monitoring Platform">
+        <Component Id="AgentSetupShortcut" Guid="A8D591E0-345C-488C-8B35-BD649EE9072D">
+          <Shortcut Id="AgentSetupShortcutLink" Name="Configure Monitoring Agent" Target="AgentSetupExecutable" WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue Root="HKLM" Key="Software\MonitoringPlatform\Agent" Name="SetupShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
     <Feature Id="ProductFeature" Title="Monitoring Platform Agent" Level="1">
       <ComponentRef Id="AgentService" />
       <ComponentRef Id="AgentDeliveryScripts" />
+      <ComponentRef Id="AgentSetupShortcut" />
     </Feature>
   </Package>
 </Wix>

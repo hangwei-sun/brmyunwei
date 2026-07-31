@@ -60,6 +60,7 @@ function Invoke-SignTool {
 
 if (-not $PSCmdlet.ShouldProcess($OutputDirectory, 'Build and sign Agent package')) { return }
 $publishDirectory = Join-Path ([IO.Path]::GetTempPath()) ('monitoring-agent-publish-' + [Guid]::NewGuid().ToString('N'))
+$setupPublishDirectory = Join-Path ([IO.Path]::GetTempPath()) ('monitoring-agent-setup-publish-' + [Guid]::NewGuid().ToString('N'))
 try {
   New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
   $publishedExe = Join-Path $PublishedInputDirectory 'MonitoringPlatform.Agent.exe'
@@ -77,6 +78,9 @@ try {
   }
   New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
   Copy-Item -Path (Join-Path $publishDirectory '*') -Destination $OutputDirectory -Recurse -Force
+  & dotnet publish (Join-Path $PSScriptRoot 'Setup\MonitoringPlatform.Agent.Setup.csproj') -c Release -p:Version=$ProductVersion -o $setupPublishDirectory
+  if ($LASTEXITCODE -ne 0) { throw 'Agent configuration application publish failed.' }
+  Copy-Item -Path (Join-Path $setupPublishDirectory '*') -Destination $OutputDirectory -Recurse -Force
   foreach ($script in @('Install-Agent.ps1', 'Enroll-Agent.ps1', 'Rotate-AgentCertificate.ps1', 'Upgrade-Agent.ps1', 'Uninstall-Agent.ps1', 'Verify-AgentPackage.ps1', 'Measure-AgentResource.ps1', 'Test-AgentScripts.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination $OutputDirectory -Force
   }
@@ -85,6 +89,7 @@ try {
   Set-Content -LiteralPath (Join-Path $OutputDirectory 'SIGNER-SHA1.txt') -Value $thumbprint -Encoding ascii
   $targetExe = Join-Path $OutputDirectory 'MonitoringPlatform.Agent.exe'
   Invoke-SignTool $targetExe
+  Invoke-SignTool (Join-Path $OutputDirectory 'MonitoringPlatform.Agent.Setup.exe')
   Get-ChildItem -LiteralPath $OutputDirectory -Filter '*.ps1' -File | ForEach-Object {
     $parameters = @{ LiteralPath = $_.FullName; Certificate = $certificate; HashAlgorithm = 'SHA256' }
     if ($TimestampServer) { $parameters.TimestampServer = $TimestampServer.AbsoluteUri }
@@ -125,6 +130,7 @@ try {
 }
 finally {
   if (Test-Path -LiteralPath $publishDirectory) { Remove-Item -LiteralPath $publishDirectory -Recurse -Force }
+  if (Test-Path -LiteralPath $setupPublishDirectory) { Remove-Item -LiteralPath $setupPublishDirectory -Recurse -Force }
 }
 Write-Host "Signed EXE, PowerShell delivery scripts, and MSI created at $OutputDirectory"
 if (-not $TimestampServer) { Write-Host 'No timestamp was used; signatures remain valid only while the local signer certificate is valid.' }

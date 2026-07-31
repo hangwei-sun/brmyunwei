@@ -1,0 +1,28 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Monitoring Platform Control" Manufacturer="Monitoring Platform"
+           Version="$(var.ProductVersion)" UpgradeCode="66E5025C-4D44-477F-895F-771A4C12166F" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Monitoring Platform Control package is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="CompanyFolder" Name="MonitoringPlatform">
+        <Directory Id="INSTALLFOLDER" Name="ControlSetup">
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MonitoringPlatformProgramMenu" Name="Monitoring Platform">
+        <Component Id="ControlSetupShortcut" Guid="7E2BE44B-1BD5-4D0F-9341-A4B5D1A48F3D">
+          <Shortcut Id="ControlSetupShortcutLink" Name="Configure Monitoring Control" Target="[INSTALLFOLDER]MonitoringPlatform.Control.Setup.exe" WorkingDirectory="INSTALLFOLDER" />
+          <RegistryValue Root="HKLM" Key="Software\MonitoringPlatform\Control" Name="SetupShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="ProductFeature" Title="Monitoring Platform Control" Level="1">
+      <ComponentGroupRef Id="ControlPayload" />
+      <ComponentRef Id="ControlSetupShortcut" />
+    </Feature>
+  </Package>
+</Wix>

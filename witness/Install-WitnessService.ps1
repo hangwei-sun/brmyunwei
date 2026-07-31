@@ -8,12 +8,38 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[A-Fa-f0-9 :]{64,95}$')]
     [string]$HttpsCertificateSha256,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[A-Za-z0-9._-]{1,64}$')]
+    [string]$NodeAId,
+    [Parameter(Mandatory = $true)]
+    [string]$NodeATokenProtectedFile,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[A-Za-z0-9._-]{1,64}$')]
+    [string]$NodeBId,
+    [Parameter(Mandatory = $true)]
+    [string]$NodeBTokenProtectedFile,
     [string]$InstallRoot = "$env:ProgramFiles\MonitoringPlatform\Witness",
     [string]$DataRoot = "$env:ProgramData\MonitoringPlatformWitness",
     [string]$ServiceName = 'MonitoringPlatformWitness'
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Read-CurrentUserProtectedSecret {
+    param([string]$Path, [string]$Name)
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $localAppData = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($localAppData, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "$Name must be an existing file below the current user LocalAppData directory."
+    }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($resolved)
+        $value = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+        if ($value.Length -lt 32 -or $value.Length -gt 256) { throw "$Name must contain a 32 to 256 character token." }
+        return $value
+    }
+    finally { Remove-Item -LiteralPath $resolved -Force -ErrorAction SilentlyContinue }
+}
 
 function Test-CertificateEnhancedKeyUsage {
     param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
@@ -45,6 +71,10 @@ if (-not (Test-PathUnderRoot -Path $InstallRoot -Root $programFilesRoot) -or -no
 }
 
 $sourceApp = Join-Path $package 'app'
+$appArchive = Join-Path $package 'app.zip'
+if (-not (Test-Path -LiteralPath $sourceApp -PathType Container) -and (Test-Path -LiteralPath $appArchive -PathType Leaf)) {
+    Expand-Archive -LiteralPath $appArchive -DestinationPath $sourceApp -Force
+}
 $sourceExe = Join-Path $sourceApp 'MonitoringPlatform.Witness.exe'
 if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) {
     throw 'The package does not contain app\MonitoringPlatform.Witness.exe.'
@@ -84,6 +114,9 @@ if (-not (Test-PathUnderRoot -Path $configuredDataPath -Root $DataRoot)) {
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     throw "Service already exists: $ServiceName"
 }
+$nodeAToken = Read-CurrentUserProtectedSecret -Path $NodeATokenProtectedFile -Name 'NodeATokenProtectedFile'
+$nodeBToken = Read-CurrentUserProtectedSecret -Path $NodeBTokenProtectedFile -Name 'NodeBTokenProtectedFile'
+if ($NodeAId -eq $NodeBId) { throw 'Witness node identifiers must be different.' }
 if (Test-Path -LiteralPath $InstallRoot) {
     throw "Install directory already exists: $InstallRoot"
 }
@@ -125,5 +158,12 @@ if ($LASTEXITCODE -ne 0) { & sc.exe delete $ServiceName | Out-Null; throw 'Faile
 & sc.exe description $ServiceName 'Monitoring Platform high-availability lease witness' | Out-Null
 & sc.exe failure $ServiceName 'reset=86400' 'actions=restart/60000/restart/300000' | Out-Null
 & sc.exe failureflag $ServiceName 1 | Out-Null
+$serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+Set-ItemProperty -LiteralPath $serviceKey -Name Environment -Type MultiString -Value @(
+    "Witness__NodeTokens__$NodeAId=$nodeAToken",
+    "Witness__NodeTokens__$NodeBId=$nodeBToken"
+)
 Start-Service -Name $ServiceName
+$nodeAToken = $null
+$nodeBToken = $null
 Write-Host "Witness service installed and started: $ServiceName"

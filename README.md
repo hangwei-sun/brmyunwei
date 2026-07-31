@@ -26,13 +26,11 @@ dotnet run --project .\agent\tests\MonitoringPlatform.Agent.SelfTests.csproj -c 
 
 自动化测试只能证明代码路径，不可替代现场验收。CI 同时执行依赖漏洞扫描。
 
-## 生成预发布包
+## 安装包交付
 
-```powershell
-.\deployment\Publish-Release.ps1 -Version 0.3.0-rc.3
-```
+发布管理员使用 [deployment/Publish-InstallerPackages.ps1](./deployment/Publish-InstallerPackages.ps1) 构建并签名三种 MSI：控制端、Witness 和 Agent。现场人员只需双击 MSI，并从开始菜单打开配置向导；不需要在控制端或被监控服务器输入命令。
 
-发布包位于 `artifacts\monitoring-platform-0.3.0-rc.3-win-x64.zip`。解压后运行 `Initialize-IsolatedPrerelease.ps1`，可在当前用户目录初始化 90 天 HTTPS 隔离实例。RC 内 Agent 明确为未签名、不可直接安装；单位内网验收使用 `agent\Build-LocalSignedAgent.ps1` 生成固定本地签名的 EXE、脚本和 MSI。完整接入、静默测量、备份恢复和停止条件见 [部署手册.md](./部署手册.md)，现场验收和回滚证据见 [预发布验收与回滚清单.md](./预发布验收与回滚清单.md)。双机切换、网络分区、回放和回切步骤见 [deployment/HA-双机生产切换与回放.md](./deployment/HA-双机生产切换与回放.md)。
+控制端 A/B 仍必须共享数据保护密钥目录和同一张密钥证书，使用不同的 Witness 密钥；Witness 必须部署在第三台独立主机。Agent 通过控制台资产页生成的一次性安装码完成 mTLS 注册。完整的准备条件、点击顺序、双机填写示例、静默期与回滚条件见 [部署手册.md](./部署手册.md)，HA 演练见 [deployment/HA-双机生产切换与回放.md](./deployment/HA-双机生产切换与回放.md)。
 
 ## 明确限制
 
