@@ -8,6 +8,7 @@ sealed class HaOptions
 {
     public const string SectionName = "HighAvailability";
     public bool Enabled { get; set; }
+    public string Mode { get; set; } = "automatic";
     public string ClusterId { get; set; } = "monitoring-platform";
     public string NodeId { get; set; } = Environment.MachineName;
     public string ConfiguredRole { get; set; } = "passive";
@@ -70,6 +71,7 @@ sealed class HaLeaseState
         _options = configuredOptions.Value;
         if (string.IsNullOrWhiteSpace(_options.NodeId)) _options.NodeId = Environment.MachineName;
         _options.ConfiguredRole = string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase) ? "active" : "passive";
+        _options.Mode = string.Equals(_options.Mode, "automatic", StringComparison.OrdinalIgnoreCase) ? "automatic" : "manual";
     }
 
     public HaOptions Options => _options;
@@ -113,33 +115,47 @@ sealed class HaLeaseState
     public bool CanWrite(long epoch, DateTimeOffset now)
     {
         lock (_gate)
-            return _options.Enabled && _grant is { } grant && grant.Epoch == epoch && grant.ExpiresAt > now && string.Equals(grant.Owner, _options.NodeId, StringComparison.Ordinal);
+            return _options.Enabled && (_options.Mode == "manual"
+                ? string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase) && epoch == 1
+                : _grant is { } grant && grant.Epoch == epoch && grant.ExpiresAt > now && string.Equals(grant.Owner, _options.NodeId, StringComparison.Ordinal));
     }
 
     public bool HoldsValidLease(DateTimeOffset now)
     {
-        lock (_gate) return _grant is { } grant && CanWriteUnsafe(grant.Epoch, now);
+        lock (_gate) return _options.Enabled && (_options.Mode == "manual"
+            ? string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase)
+            : _grant is { } grant && CanWriteUnsafe(grant.Epoch, now));
     }
 
     public bool CanMutate(DateTimeOffset now)
     {
-        lock (_gate) return !_options.Enabled || (_grant is { } grant && CanWriteUnsafe(grant.Epoch, now.AddSeconds(SafetySeconds())));
+        lock (_gate) return !_options.Enabled || (_options.Mode == "manual"
+            ? string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase)
+            : _grant is { } grant && CanWriteUnsafe(grant.Epoch, now.AddSeconds(SafetySeconds())));
     }
 
     public bool CanCommit(DateTimeOffset now) => CanMutate(now);
 
     public long? CurrentEpoch(DateTimeOffset now)
     {
-        lock (_gate) return _grant is { } grant && CanWriteUnsafe(grant.Epoch, now) ? grant.Epoch : null;
+        lock (_gate)
+        {
+            if (_options.Enabled && _options.Mode == "manual" && string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase)) return 1;
+            return _grant is { } grant && CanWriteUnsafe(grant.Epoch, now) ? grant.Epoch : null;
+        }
     }
 
     public HaStatusDto Status(DateTimeOffset now)
     {
         lock (_gate)
         {
-            var active = _grant is { } grant && CanWriteUnsafe(grant.Epoch, now);
-            return new HaStatusDto(_options.Enabled, _options.Enabled ? (active ? "active" : "passive") : "single-node", _options.NodeId,
-                _options.ConfiguredRole, active, active ? _grant!.Epoch : null, active ? _grant!.ExpiresAt : null,
+            var active = _options.Enabled && (_options.Mode == "manual"
+                ? string.Equals(_options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase)
+                : _grant is { } grant && CanWriteUnsafe(grant.Epoch, now));
+            var epoch = active ? (_options.Mode == "manual" ? 1 : _grant!.Epoch) : (long?)null;
+            DateTimeOffset? expiresAt = active && _options.Mode != "manual" ? _grant!.ExpiresAt : null;
+            return new HaStatusDto(_options.Enabled, _options.Enabled ? (_options.Mode == "manual" ? (active ? "manual-active" : "manual-passive") : (active ? "active" : "passive")) : "single-node", _options.NodeId,
+                _options.ConfiguredRole, active, epoch, expiresAt,
                 _options.WitnessUrl, _message);
         }
     }
@@ -155,6 +171,11 @@ sealed class HaLeaseWorker(IHaLeaseClient client, HaLeaseState state, ILogger<Ha
     {
         var options = state.Options;
         if (!options.Enabled) return;
+        if (options.Mode == "manual")
+        {
+            state.LoseLease("手动主备模式，不使用 Witness 自动接管。");
+            return;
+        }
         if (!string.Equals(options.ConfiguredRole, "active", StringComparison.OrdinalIgnoreCase))
         {
             state.LoseLease("节点配置为 passive，不参与 witness 租约竞争。");

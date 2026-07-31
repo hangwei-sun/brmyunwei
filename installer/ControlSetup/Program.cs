@@ -50,7 +50,7 @@ internal sealed class LanCertificatePackForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         Add(panel, 0, "控制端 A IP", _controlA);
         Add(panel, 1, "控制端 B IP", _controlB);
-        Add(panel, 2, "Witness IP", _witness);
+        Add(panel, 2, "Witness IP（可选）", _witness);
         var outputPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
         _output.Width = 395;
         outputPanel.Controls.Add(_output);
@@ -60,7 +60,7 @@ internal sealed class LanCertificatePackForm : Form
         Add(panel, 3, "保存证书包的位置", outputPanel);
         Add(panel, 4, "证书包口令", _password);
         Add(panel, 5, "再次输入口令", _passwordRepeat);
-        panel.Controls.Add(new Label { Text = "生成后请将对应 PFX 文件复制到 A、B、Witness。使用 Windows 的双击导入向导导入“本地计算机 / 个人”证书库；将 LAN-Root.cer 导入三台机器的“受信任的根证书颁发机构”。Agent 不需要导入根证书。", AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Color.DimGray }, 1, 6);
+        panel.Controls.Add(new Label { Text = "只有启用自动接管时才填写 Witness IP。留空表示两台手动主备模式，不会生成 Witness.pfx。使用 Windows 的双击导入向导导入证书；Agent 不需要导入根证书。", AutoSize = true, MaximumSize = new Size(520, 0), ForeColor = Color.DimGray }, 1, 6);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
         actions.Controls.Add(_create);
         actions.Controls.Add(new Button { Text = "关闭", AutoSize = true, DialogResult = DialogResult.Cancel });
@@ -89,8 +89,9 @@ internal sealed class LanCertificatePackForm : Form
         {
             var controlA = ParseIp(_controlA.Text, "控制端 A IP");
             var controlB = ParseIp(_controlB.Text, "控制端 B IP");
-            var witness = ParseIp(_witness.Text, "Witness IP");
-            if (controlA.Equals(controlB) || controlA.Equals(witness) || controlB.Equals(witness)) throw new InvalidOperationException("三台机器必须使用不同 IP。");
+            IPAddress? witness = null;
+            if (!string.IsNullOrWhiteSpace(_witness.Text)) witness = ParseIp(_witness.Text, "Witness IP");
+            if (controlA.Equals(controlB) || (witness is not null && (controlA.Equals(witness) || controlB.Equals(witness)))) throw new InvalidOperationException("控制端 A、B 和 Witness（如填写）必须使用不同 IP。");
             if (_password.Text.Length < 12 || _password.Text != _passwordRepeat.Text) throw new InvalidOperationException("证书包口令至少 12 位，且两次输入必须一致。");
             var output = Path.GetFullPath(_output.Text.Trim());
             if (Directory.Exists(output) && Directory.EnumerateFileSystemEntries(output).Any()) throw new InvalidOperationException("保存目录已存在内容，请选择一个空位置。");
@@ -107,12 +108,12 @@ internal sealed class LanCertificatePackForm : Form
             File.WriteAllBytes(Path.Combine(output, "LAN-Root.cer"), root.Export(X509ContentType.Cert));
             CreateServerCertificate(root, controlA, Path.Combine(output, "Control-A.pfx"), _password.Text);
             CreateServerCertificate(root, controlB, Path.Combine(output, "Control-B.pfx"), _password.Text);
-            CreateServerCertificate(root, witness, Path.Combine(output, "Witness.pfx"), _password.Text);
+            if (witness is not null) CreateServerCertificate(root, witness, Path.Combine(output, "Witness.pfx"), _password.Text);
             CreateDataProtectionCertificate(root, Path.Combine(output, "DataProtection.pfx"), _password.Text);
             using var issuer = CreateAgentIssuer(root);
             File.WriteAllBytes(Path.Combine(output, "Agent-Issuer.cer"), issuer.Export(X509ContentType.Cert));
             File.WriteAllBytes(Path.Combine(output, "Agent-Issuer.pfx"), issuer.Export(X509ContentType.Pfx, _password.Text));
-            File.WriteAllText(Path.Combine(output, "使用说明.txt"), "1. 将 LAN-Root.cer 导入控制端 A、控制端 B、Witness 的本地计算机\\受信任的根证书颁发机构。\r\n2. 将 Control-A.pfx 导入控制端 A 的本地计算机\\个人；Control-B.pfx 导入控制端 B；Witness.pfx 导入 Witness。\r\n3. 将 DataProtection.pfx 和 Agent-Issuer.pfx 都导入控制端 A、B 的本地计算机\\个人；将 Agent-Issuer.cer 导入 A、B 的本地计算机\\受信任的根证书颁发机构。\r\n4. 证书包口令仅用于导入 PFX，请在导入完成后保存在单位密码管理器中。", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(output, "使用说明.txt"), "1. 将 LAN-Root.cer 导入控制端 A、B 的本地计算机\\受信任的根证书颁发机构；如生成了 Witness.pfx，再导入 Witness。\r\n2. 将 Control-A.pfx 导入 A、Control-B.pfx 导入 B 的本地计算机\\个人。\r\n3. 将 DataProtection.pfx 和 Agent-Issuer.pfx 都导入控制端 A、B 的本地计算机\\个人；将 Agent-Issuer.cer 导入 A、B 的本地计算机\\受信任的根证书颁发机构。\r\n4. 证书包口令仅用于导入 PFX，请在导入完成后保存在单位密码管理器中。", Encoding.UTF8);
             _password.Clear();
             _passwordRepeat.Clear();
             _status.ForeColor = Color.ForestGreen;
@@ -183,8 +184,8 @@ internal sealed class ControlSetupForm : Form
     private readonly TextBox _peerNodeId = new();
     private readonly TextBox _peerUrl = new();
     private readonly TextBox _witnessUrl = new();
-    private readonly TextBox _replicationDirectory = new();
-    private readonly TextBox _keyDirectory = new();
+    private readonly CheckBox _automaticFailover = new() { Text = "启用自动接管（需要独立 Witness）", AutoSize = true };
+    private readonly TextBox _sharedRootDirectory = new();
     private readonly ComboBox _certificate = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox _dataProtectionCertificate = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox _agentIssuer = new() { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -206,7 +207,7 @@ internal sealed class ControlSetupForm : Form
 
         _role.Items.AddRange(["主用节点 (A)", "备用节点 (B)"]);
         _role.SelectedIndex = 0;
-        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(22), ColumnCount = 2, RowCount = 18 };
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(22), ColumnCount = 2, RowCount = 19 };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         Add(panel, 0, "本机节点名称", _nodeId);
@@ -215,8 +216,8 @@ internal sealed class ControlSetupForm : Form
         Add(panel, 3, "对端节点名称", _peerNodeId);
         Add(panel, 4, "对端 HTTPS 地址", _peerUrl);
         Add(panel, 5, "见证服务 HTTPS 地址", _witnessUrl);
-        Add(panel, 6, "共享快照目录", _replicationDirectory);
-        Add(panel, 7, "共享密钥目录", _keyDirectory);
+        panel.Controls.Add(_automaticFailover, 1, 6);
+        Add(panel, 7, "HA 共享根目录", _sharedRootDirectory);
         Add(panel, 8, "HTTPS 与密钥证书", _certificate);
         Add(panel, 9, "共享数据保护证书", _dataProtectionCertificate);
         Add(panel, 10, "Agent 注册 CA 证书", _agentIssuer);
@@ -226,7 +227,7 @@ internal sealed class ControlSetupForm : Form
         Add(panel, 14, "本节点 Witness 密钥", _witnessToken);
         panel.Controls.Add(new Label
         {
-            Text = "两台控制端使用各自的 HTTPS 证书，但必须导入同一张数据保护证书和 Agent 注册 CA，并使用同一个共享密钥目录。Witness 密钥在服务环境保存，不写入配置文件。",
+            Text = "两台控制端使用各自的 HTTPS 证书，但必须导入同一张数据保护证书和 Agent 注册 CA。只需填写一个共享根目录，软件会自动使用其 snapshots 和 keys 子目录。Witness 密钥在服务环境保存，不写入配置文件。",
             AutoSize = true,
             MaximumSize = new Size(520, 0),
             ForeColor = Color.DimGray
@@ -237,6 +238,13 @@ internal sealed class ControlSetupForm : Form
         panel.Controls.Add(actions, 1, 16);
         panel.Controls.Add(_status, 1, 17);
         Controls.Add(panel);
+        _automaticFailover.CheckedChanged += (_, _) =>
+        {
+            _witnessUrl.Enabled = _automaticFailover.Checked;
+            _witnessToken.Enabled = _automaticFailover.Checked;
+        };
+        _witnessUrl.Enabled = false;
+        _witnessToken.Enabled = false;
         LoadCertificates();
         _install.Click += Install;
     }
@@ -278,16 +286,18 @@ internal sealed class ControlSetupForm : Form
             if (string.Equals(nodeId, peerNodeId, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("两台控制端的节点名称不能相同。");
             var publicUrl = ValidateHttpsUrl(_publicUrl.Text, "本机 HTTPS 地址");
             var peerUrl = ValidateHttpsUrl(_peerUrl.Text, "对端 HTTPS 地址");
-            var witnessUrl = ValidateHttpsUrl(_witnessUrl.Text, "见证服务 HTTPS 地址");
-            var replication = ValidateUncPath(_replicationDirectory.Text, "共享快照目录");
-            var keys = ValidateUncPath(_keyDirectory.Text, "共享密钥目录");
+            var automatic = _automaticFailover.Checked;
+            var witnessUrl = automatic ? ValidateHttpsUrl(_witnessUrl.Text, "见证服务 HTTPS 地址") : "";
+            var sharedRoot = ValidateUncPath(_sharedRootDirectory.Text, "HA 共享根目录");
+            var replication = sharedRoot + "\\snapshots";
+            var keys = sharedRoot + "\\keys";
             if (_certificate.SelectedItem is not CertificateItem selectedCertificate) throw new InvalidOperationException("请选择已导入本机证书库的 HTTPS 证书。");
             if (_dataProtectionCertificate.SelectedItem is not CertificateItem selectedDataProtectionCertificate) throw new InvalidOperationException("请选择两台控制端共同导入的数据保护证书。");
             if (_agentIssuer.SelectedItem is not CertificateItem selectedIssuer) throw new InvalidOperationException("请选择已导入本机证书库的 Agent 注册 CA 证书。");
             var username = _adminUser.Text.Trim();
             if (!Regex.IsMatch(username, "^[A-Za-z0-9._-]{3,64}$")) throw new InvalidOperationException("管理员账号长度为 3 至 64，只能使用字母、数字、点、下划线或连字符。");
             if (_adminPassword.Text.Length < 12 || _adminPassword.Text != _adminPasswordRepeat.Text) throw new InvalidOperationException("管理员密码至少 12 位，且两次输入必须一致。");
-            if (_witnessToken.Text.Trim().Length is < 32 or > 256) throw new InvalidOperationException("Witness 密钥长度必须为 32 至 256 位。");
+            if (automatic && _witnessToken.Text.Trim().Length is < 32 or > 256) throw new InvalidOperationException("启用自动接管时，Witness 密钥长度必须为 32 至 256 位。");
 
             var root = AppContext.BaseDirectory;
             var templatePath = Path.Combine(root, "appsettings.Production.template.json");
@@ -310,6 +320,7 @@ internal sealed class ControlSetupForm : Form
             config["AgentEnrollment"]!["IssuerCertificateSubject"] = issuer.GetNameInfo(X509NameType.SimpleName, false);
             config["AgentEnrollment"]!["IssuerCertificateSha256"] = issuerSha256;
             config["HighAvailability"]!["Enabled"] = true;
+            config["HighAvailability"]!["Mode"] = automatic ? "automatic" : "manual";
             config["HighAvailability"]!["NodeId"] = nodeId;
             config["HighAvailability"]!["ConfiguredRole"] = _role.SelectedIndex == 0 ? "active" : "passive";
             config["HighAvailability"]!["WitnessUrl"] = witnessUrl;
@@ -323,7 +334,7 @@ internal sealed class ControlSetupForm : Form
             File.WriteAllText(configPath, config.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
 
             var passwordFile = WriteProtectedSecret(_adminPassword.Text);
-            var witnessFile = WriteProtectedSecret(_witnessToken.Text.Trim());
+            var witnessFile = automatic ? WriteProtectedSecret(_witnessToken.Text.Trim()) : "";
             _adminPassword.Clear();
             _adminPasswordRepeat.Clear();
             _witnessToken.Clear();

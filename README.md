@@ -1,6 +1,6 @@
 # 轻量化 Windows 机房运维监控平台
 
-默认仍以 **单节点、隔离预发布** 运行。仓库同时提供双机 HA 的 witness fencing、备用节点自动接管监视器、快照回放和受控回切交付；必须在真实三节点环境完成切换演练后才能启用生产 HA。
+默认仍以 **单节点、隔离预发布** 运行。仓库同时提供双机快照回放和受控回切；只有增加独立 Witness 后，才启用自动接管和 fencing。两台设备可以先按人工切换模式上线，不要求额外购买高配主机。
 
 ## 当前能力
 
@@ -30,12 +30,12 @@ dotnet run --project .\agent\tests\MonitoringPlatform.Agent.SelfTests.csproj -c 
 
 发布管理员使用 [deployment/Publish-InstallerPackages.ps1](./deployment/Publish-InstallerPackages.ps1) 构建并签名三种 MSI：控制端、Witness 和 Agent。现场人员只需双击 MSI，并从开始菜单打开配置向导；不需要在控制端或被监控服务器输入命令。
 
-控制端 A/B 仍必须共享数据保护密钥目录和同一张密钥证书，使用不同的 Witness 密钥；Witness 必须部署在第三台独立主机。Agent 通过控制台资产页生成的一次性安装码完成 mTLS 注册。完整的准备条件、点击顺序、双机填写示例、静默期与回滚条件见 [部署手册.md](./部署手册.md)，HA 演练见 [deployment/HA-双机生产切换与回放.md](./deployment/HA-双机生产切换与回放.md)。
+控制端 A/B 使用同一个共享根目录（软件自动划分 `snapshots` 与 `keys`）和同一张数据保护证书。自动接管模式才需要 Witness 和不同的 Witness 密钥；两台模式由运维人员人工确认切换。Agent 通过控制台资产页生成的一次性安装码完成 mTLS 注册。完整的准备条件、点击顺序、双机填写示例、静默期与回滚条件见 [部署手册.md](./部署手册.md)，HA 演练见 [deployment/HA-双机生产切换与回放.md](./deployment/HA-双机生产切换与回放.md)。
 
 ## 明确限制
 
 - 当前对外可运行范围仍是单节点隔离预发布。只有在 `HighAvailability.Enabled=false` 时 `/api/ha` 返回 `single-node`；不得据此把 HA 代码基础当作已验证高可用。
-- HA 自动接管只在备用节点确认主节点 `/api/ready` 连续失败且 witness 授予新 epoch 后执行；计划切换与回切仍使用受控人工流程。没有共享受保护数据密钥环、独立 witness、负载均衡 ready 检查和完整演练证据时，不配置自动接管。
+- HA 自动接管只在备用节点确认主节点 `/api/ready` 连续失败且 witness 授予新 epoch 后执行；没有独立 witness 时禁止配置自动接管，只执行受控人工切换。无论哪种模式，都必须保留共享受保护数据密钥环、负载均衡 ready 检查和完整演练证据。
 - 启用 `AgentEnrollment` 后默认禁止静态 Agent Key；注册成功的资产永久保持证书认证模式，除非重新注册，否则不能通过 Key 降级。一次性注册和 mTLS 仍必须通过 Windows Server 2012/2012 R2、证书信任与轮换回滚现场门禁。
 - Agent 支持单位内网固定本地签名：使用不可导出的 Code Signing 叶证书签署 EXE、脚本和 MSI，服务器按带外核对的唯一指纹导入 Root/TrustedPublisher。更换签名证书、升级/卸载回滚和 Server 2012/2012 R2 实机结果仍是扩大范围前的门禁。
 - 腾讯云短信必须依次完成 `disabled -> test -> live`：先只允许配置的测试号码验证模板、重试和去重；任何真实联系人启用前需通过对应证据。

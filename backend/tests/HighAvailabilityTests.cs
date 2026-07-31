@@ -43,6 +43,21 @@ public sealed class HighAvailabilityTests
     }
 
     [Fact]
+    public void ManualHa_AllowsOnlyConfiguredActiveNodeWithoutWitness()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var active = new HaLeaseState(Options.Create(new HaOptions { Enabled = true, Mode = "manual", ConfiguredRole = "active", NodeId = "node-a" }));
+        var passive = new HaLeaseState(Options.Create(new HaOptions { Enabled = true, Mode = "manual", ConfiguredRole = "passive", NodeId = "node-b" }));
+
+        Assert.True(active.CanMutate(now));
+        Assert.True(active.CanWrite(1, now));
+        Assert.Equal("manual-active", active.Status(now).Mode);
+        Assert.False(passive.CanMutate(now));
+        Assert.False(passive.CanWrite(1, now));
+        Assert.Equal("manual-passive", passive.Status(now).Mode);
+    }
+
+    [Fact]
     public void ReplicationManifest_ValidatesHashChainAndRejectsOldEpoch()
     {
         var created = DateTimeOffset.UtcNow;
