@@ -9,6 +9,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Test-CertificateEnhancedKeyUsage {
+  param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
+  $extensions = @($Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+  if ($extensions.Count -ne 1) { return $false }
+  try {
+    $decoded = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+    $decoded.CopyFrom($extensions[0])
+    return @($decoded.EnhancedKeyUsages | Where-Object { $_.Value -eq $RequiredOid }).Count -eq 1
+  }
+  catch { return $false }
+}
+
 $approvedSigner = $ApprovedSignerThumbprint.Replace(' ', '').ToUpperInvariant()
 $selfSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
 if ($selfSignature.Status -ne 'Valid' -or -not $selfSignature.SignerCertificate -or $selfSignature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $approvedSigner) {
@@ -35,7 +48,7 @@ $agentName = ($currentConfiguration.configuration.appSettings.add | Where-Object
 if ([string]::IsNullOrWhiteSpace($agentName) -or $certificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne $agentName) {
   throw 'New client certificate subject does not match the configured AgentName.'
 }
-if (-not ($certificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.2' })) {
+if (-not (Test-CertificateEnhancedKeyUsage $certificate '1.3.6.1.5.5.7.3.2')) {
   throw 'New certificate is missing the Client Authentication EKU.'
 }
 $backupPath = "$configPath.pre-rotation-$(Get-Date -Format yyyyMMddHHmmss)"

@@ -12,6 +12,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Test-CertificateEnhancedKeyUsage {
+    param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
+    $extensions = @($Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+    if ($extensions.Count -ne 1) { return $false }
+    try {
+        $decoded = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+        $decoded.CopyFrom($extensions[0])
+        return @($decoded.EnhancedKeyUsages | Where-Object { $_.Value -eq $RequiredOid }).Count -eq 1
+    }
+    catch { return $false }
+}
+
 function Test-PathUnderRoot {
     param([string]$Path, [string]$Root)
     $resolvedPath = [IO.Path]::GetFullPath($Path)
@@ -102,7 +115,7 @@ if ($kestrelMatches.Count -ne 1) {
 $httpsCertificate = $kestrelMatches[0]
 $httpsPin = Get-CertificateSha256 $httpsCertificate
 if ($httpsPin -notin $providedPins -or
-    -not ($httpsCertificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' })) {
+    -not (Test-CertificateEnhancedKeyUsage $httpsCertificate '1.3.6.1.5.5.7.3.1')) {
     throw 'The Kestrel-selected HTTPS certificate must match a supplied SHA-256 pin and include the Server Authentication EKU.'
 }
 $requiredPins = @($httpsPin)

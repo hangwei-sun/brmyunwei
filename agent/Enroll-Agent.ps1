@@ -12,6 +12,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Test-CertificateEnhancedKeyUsage {
+  param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
+  $extensions = @($Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+  if ($extensions.Count -ne 1) { return $false }
+  try {
+    $decoded = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+    $decoded.CopyFrom($extensions[0])
+    return @($decoded.EnhancedKeyUsages | Where-Object { $_.Value -eq $RequiredOid }).Count -eq 1
+  }
+  catch { return $false }
+}
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $approvedSigner = $ApprovedSignerThumbprint.Replace(' ', '').ToUpperInvariant()
 $selfSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
@@ -77,6 +90,7 @@ $certificate = Get-ChildItem Cert:\LocalMachine\My | Where-Object {
   $_.HasPrivateKey -and (([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($_.RawData))).Replace('-', '') -eq $actualSha256)
 } | Select-Object -First 1
 if (-not $certificate) { throw 'The issued certificate was not found with an accessible private key.' }
+if (-not (Test-CertificateEnhancedKeyUsage $certificate '1.3.6.1.5.5.7.3.2')) { throw 'The issued certificate is missing the Client Authentication EKU.' }
 if (-not ($certificate.PrivateKey -is [Security.Cryptography.RSACryptoServiceProvider])) { throw 'Enrollment requires the Microsoft RSA SChannel CSP private key provider.' }
 $keyName = $certificate.PrivateKey.CspKeyContainerInfo.UniqueKeyContainerName
 $keyPath = Join-Path "$env:ProgramData\Microsoft\Crypto\RSA\MachineKeys" $keyName

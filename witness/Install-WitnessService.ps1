@@ -15,6 +15,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Test-CertificateEnhancedKeyUsage {
+    param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
+    $extensions = @($Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+    if ($extensions.Count -ne 1) { return $false }
+    try {
+        $decoded = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+        $decoded.CopyFrom($extensions[0])
+        return @($decoded.EnhancedKeyUsages | Where-Object { $_.Value -eq $RequiredOid }).Count -eq 1
+    }
+    catch { return $false }
+}
+
 function Test-PathUnderRoot {
     param([string]$Path, [string]$Root)
     $resolvedPath = [System.IO.Path]::GetFullPath($Path)
@@ -62,7 +74,7 @@ $certificateMatches = @(Get-ChildItem Cert:\LocalMachine\My | Where-Object {
 })
 if ($certificateMatches.Count -ne 1) { throw 'Exactly one valid HTTPS certificate matching the configured subject and SHA-256 fingerprint is required.' }
 $httpsCertificate = $certificateMatches[0]
-if (-not ($httpsCertificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' })) {
+if (-not (Test-CertificateEnhancedKeyUsage $httpsCertificate '1.3.6.1.5.5.7.3.1')) {
     throw 'Witness HTTPS certificate is missing the Server Authentication EKU.'
 }
 $configuredDataPath = [System.IO.Path]::GetFullPath([string]$witnessConfig.Witness.DataPath)

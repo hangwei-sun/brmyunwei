@@ -8,6 +8,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
+
+function Test-CertificateEnhancedKeyUsage {
+    param([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$RequiredOid)
+    $extensions = @($Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
+    if ($extensions.Count -ne 1) { return $false }
+    try {
+        $decoded = New-Object Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension
+        $decoded.CopyFrom($extensions[0])
+        return @($decoded.EnhancedKeyUsages | Where-Object { $_.Value -eq $RequiredOid }).Count -eq 1
+    }
+    catch { return $false }
+}
+
 $packageRoot = $PSScriptRoot
 $sourceApp = Join-Path $packageRoot 'app'
 $sourceAgent = Join-Path $packageRoot 'agent'
@@ -19,8 +32,8 @@ if (-not $install.StartsWith($currentUserRoot + [IO.Path]::DirectorySeparatorCha
 if (-not (Test-Path -LiteralPath (Join-Path $sourceApp 'MonitoringPlatform.Api.exe') -PathType Leaf)) {
     throw 'Run this script from an extracted release package.'
 }
-if (Test-Path -LiteralPath (Join-Path $install 'initialized.json')) {
-    throw "Prerelease is already initialized: $install"
+if (Test-Path -LiteralPath $install) {
+    throw "Prerelease install path already exists: $install"
 }
 
 function Test-HttpsPortAvailable([int]$Port) {
@@ -56,6 +69,11 @@ $dataRoot = Join-Path $install 'data'
 $backupRoot = Join-Path $install 'backup'
 $keysRoot = Join-Path $install 'keys'
 $agentRoot = Join-Path $install 'agent-package'
+$rootCertificate = $null
+$certificate = $null
+$createdInstall = $false
+try {
+$createdInstall = $true
 New-Item -ItemType Directory -Path $appRoot, $dataRoot, $backupRoot, $keysRoot, $agentRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $sourceApp '*') -Destination $appRoot -Recurse -Force
 Copy-Item -Path (Join-Path $sourceAgent '*') -Destination $agentRoot -Recurse -Force
@@ -79,7 +97,7 @@ $certificate = New-SelfSignedCertificate -Subject "CN=$certificateCommonName" -D
 $rootCertificateSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rootCertificate.RawData))).Replace('-', '')
 if (-not $rootCertificate.HasPrivateKey -or -not $certificate.HasPrivateKey -or
     $certificate.Issuer -ne $rootCertificate.Subject -or $certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow.AddDays(7) -or
-    -not ($certificate.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' })) {
+    -not (Test-CertificateEnhancedKeyUsage $certificate '1.3.6.1.5.5.7.3.1')) {
     throw 'Generated prerelease TLS certificate failed private-key, issuer, lifetime, or Server Authentication EKU validation.'
 }
 $rootConstraints = $rootCertificate.Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] }
@@ -151,3 +169,16 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to secure the isolated prerelease direc
 Write-Host "Initialized isolated prerelease: $install"
 Write-Host "HTTPS URL: https://localhost:$HttpsPort"
 Write-Host "Root CA certificate for approved test servers: $rootPublicCertificate"
+}
+catch {
+    if ($certificate) {
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
+    }
+    if ($rootCertificate) {
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($rootCertificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
+    }
+    if ($createdInstall -and (Test-Path -LiteralPath $install)) {
+        Remove-Item -LiteralPath $install -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    throw
+}
