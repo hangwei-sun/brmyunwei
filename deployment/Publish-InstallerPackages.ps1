@@ -74,11 +74,16 @@ try {
   if (git status --porcelain) { throw 'Installer builds require a clean Git working tree.' }
   if (-not $PSCmdlet.ShouldProcess($output, 'Build signed Control, Witness, and Agent MSI packages')) { return }
   New-Item -ItemType Directory -Path $output -Force | Out-Null
-  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath '.\node_modules\.bin\vite.cmd' -PathType Leaf)) {
-    npm ci
+  $frontendToolRoot = '.\node_modules'
+  if ($RestoreFrontendDependencies -or -not (Test-Path -LiteralPath (Join-Path $frontendToolRoot '.bin\vite.cmd') -PathType Leaf)) {
+    $frontendToolRoot = '.\installer\.frontend-build'
+    if (Test-Path -LiteralPath $frontendToolRoot) { Remove-Item -LiteralPath $frontendToolRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $frontendToolRoot -Force | Out-Null
+    Copy-Item -LiteralPath '.\package.json', '.\package-lock.json' -Destination $frontendToolRoot -Force
+    npm ci --prefix $frontendToolRoot
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
   }
-  npm run build
+  & (Join-Path $frontendToolRoot '.bin\vite.cmd') build
   if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
   dotnet publish '.\backend\MonitoringPlatform.Api.csproj' -c Release -r win-x64 --self-contained true -p:Version=$ProductVersion -o '.\installer\.stage\control\app'
   if ($LASTEXITCODE -ne 0) { throw 'Control application publish failed.' }
@@ -112,5 +117,6 @@ try {
 }
 finally {
   Remove-Item -LiteralPath '.\installer\.stage' -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath '.\installer\.frontend-build' -Recurse -Force -ErrorAction SilentlyContinue
   Pop-Location
 }
